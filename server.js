@@ -4,6 +4,10 @@ const app = express();
 
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.send('Hello! Your backend is working!');
+});
+
 app.post('/api/visit', (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
   console.log(`User IP: ${ip}`);
@@ -13,5 +17,4 @@ app.post('/api/visit', (req, res) => {
   res.status(200).send('IP recorded');
 });
 
-
-app.listen(3000, () => console.log('Server running on port 3000')); 
+app.listen(3000, () => console.log('Server running on port 3000'));
