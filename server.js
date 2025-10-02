@@ -1,26 +1,22 @@
-// Backend server using Express.js
+
+// Test
 const express = require('express');
 const cors = require('cors');
 const app = express();
 
-// Enable CORS
 app.use(cors());
 
-// Parse JSON request bodies
 app.use(express.json());
 
-// Root Endpoint
 app.get('/', (req, res) => {
   res.send('Hello! Your backend is working!');
 });
 
-// API Endpoint to log IP and payload
 app.post('/api/visit', (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
   console.log(`User IP: ${ip}`);
   console.log('Payload:', req.body);
 
-  // Send data to Discord webhook
   const webhookURL = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
   const payload = {
     content: `New visitor detected!\n- **Device**: ${req.body.device}\n- **Timestamp**: ${req.body.ts}\n- **IP Address**: ${ip}`,
