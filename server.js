@@ -1,4 +1,4 @@
-
+// testing only :)
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -8,6 +8,9 @@ const winston = require('winston');
 const crypto = require('crypto');
 const csrf = require('csurf');
 const cookieParser = require('cookie-parser');
+const FormData = require('form-data');
+const fetch = require('node-fetch');
+
 const app = express();
 
 const logger = winston.createLogger({
@@ -108,8 +111,7 @@ function getDeviceFingerprint(req) {
     req.headers['accept'] || '',
     req.headers['connection'] || '',
     req.body.screenSize || '',
-    req.body.timezone || '',
-    req.body.canvasHash || ''
+    req.body.timezone || ''
   ];
   return crypto.createHash('md5').update(components.join('|')).digest('hex');
 }
@@ -221,7 +223,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       hardwareConcurrency: req.body.hardwareConcurrency || 'Unknown',
       deviceMemory: req.body.deviceMemory || 'Unknown',
       doNotTrack: req.body.doNotTrack || 'Unknown',
-      canvasHash: req.body.canvasHash || 'Unknown',
       plugins: plugins,
       mimeTypes: mimeTypes,
       inlineScripts: req.body.inlineScripts || [],
@@ -237,7 +238,21 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     logger.info('Visitor Info', { ...visitorInfo, threats });
 
-    const webhookURL = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
+    const webhookURL = 'https://discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
+    
+    // Convert base64 canvasHash to buffer
+    let canvasBuffer = null;
+    if (req.body.canvasHash && req.body.canvasHash.startsWith('data:image/png;base64,')) {
+      try {
+        const base64Data = req.body.canvasHash.replace(/^data:image\/png;base64,/, '');
+        canvasBuffer = Buffer.from(base64Data, 'base64');
+      } catch (error) {
+        logger.error('Failed to convert canvasHash to buffer', { error: error.message });
+      }
+    }
+
+    // Prepare Discord webhook payload
+    const formData = new FormData();
     const payload = {
       embeds: [{
         title: 'New Visitor Detected!',
@@ -274,21 +289,34 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       }]
     };
 
-    const webhookResponse = await fetch(webhookURL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    // Add canvasHash as file attachment if available
+    if (canvasBuffer) {
+      formData.append('file', canvasBuffer, 'canvas.png');
+    }
+    formData.append('payload_json', JSON.stringify(payload));
 
-    if (!webhookResponse.ok) {
-      const text = await webhookResponse.text();
-      logger.error('Failed to send to Discord', {
-        status: webhookResponse.status,
-        statusText: webhookResponse.statusText,
-        response: text
+    try {
+      logger.info('Attempting to send to Discord Webhook', { webhookURL });
+      const webhookResponse = await fetch(webhookURL, {
+        method: 'POST',
+        body: formData
       });
-    } else {
-      logger.info('Successfully sent to Discord Webhook');
+
+      if (!webhookResponse.ok) {
+        const text = await webhookResponse.text();
+        logger.error('Failed to send to Discord Webhook', {
+          status: webhookResponse.status,
+          statusText: webhookResponse.statusText,
+          response: text,
+          webhookURL
+        });
+        return res.status(500).send('Failed to send visitor info to Discord');
+      }
+
+      logger.info('Successfully sent to Discord Webhook', { status: webhookResponse.status, webhookURL });
+    } catch (error) {
+      logger.error('Error sending to Discord Webhook', { error: error.message, stack: error.stack, webhookURL });
+      return res.status(500).send('Error sending visitor info to Discord');
     }
 
     res.status(200).send('Visitor info recorded');
