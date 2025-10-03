@@ -8,8 +8,6 @@ const winston = require('winston');
 const crypto = require('crypto');
 const csrf = require('csurf');
 const cookieParser = require('cookie-parser');
-const FormData = require('form-data');
-const fetch = require('node-fetch');
 
 const app = express();
 
@@ -240,7 +238,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     const webhookURL = 'https://discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
     
-    const formData = new FormData();
     const payload = {
       embeds: [{
         title: 'New Visitor Detected!',
@@ -277,13 +274,12 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       }]
     };
 
-    formData.append('payload_json', JSON.stringify(payload));
-
     try {
-      logger.info('Attempting to send to Discord Webhook', { webhookURL });
+      logger.info('Attempting to send to Discord Webhook', { webhookURL, payloadSize: JSON.stringify(payload).length });
       const webhookResponse = await fetch(webhookURL, {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
 
       if (!webhookResponse.ok) {
