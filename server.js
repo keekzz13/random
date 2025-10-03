@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -34,7 +35,7 @@ app.use(cors({
       'http://localhost:3000',
       'https://random-nfpf.onrender.com',
       'https://vanprojects.netlify.app',
-      'https://artifacts.grokusercontent.com' // Added for potential testing
+      'https://artifacts.grokusercontent.com'
     ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, origin || '*');
@@ -50,7 +51,13 @@ app.use(express.json());
 app.use(express.static('public'));
 app.use(limiter);
 
-const csrfProtection = csrf({ cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } });
+const csrfProtection = csrf({
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+  }
+});
 app.use(csrfProtection);
 
 app.use((req, res, next) => {
