@@ -240,18 +240,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     const webhookURL = 'https://discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
     
-    // Convert base64 canvasHash to buffer
-    let canvasBuffer = null;
-    if (req.body.canvasHash && req.body.canvasHash.startsWith('data:image/png;base64,')) {
-      try {
-        const base64Data = req.body.canvasHash.replace(/^data:image\/png;base64,/, '');
-        canvasBuffer = Buffer.from(base64Data, 'base64');
-      } catch (error) {
-        logger.error('Failed to convert canvasHash to buffer', { error: error.message });
-      }
-    }
-
-    // Prepare Discord webhook payload
     const formData = new FormData();
     const payload = {
       embeds: [{
@@ -289,10 +277,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       }]
     };
 
-    // Add canvasHash as file attachment if available
-    if (canvasBuffer) {
-      formData.append('file', canvasBuffer, 'canvas.png');
-    }
     formData.append('payload_json', JSON.stringify(payload));
 
     try {
