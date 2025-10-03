@@ -22,10 +22,18 @@ const logger = winston.createLogger({
   ]
 });
 
+// Rate limiting (defined before usage)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    const allowedOrigins = ['http://localhost:3000', 'https://vanprojects.netlify.app/'];
+    const allowedOrigins = ['http://localhost:3000', 'https://random-nfpf.onrender.com'];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, origin || '*');
     } else {
@@ -38,16 +46,7 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.static('public')); // Serve static files
-app.use(limiter);
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false
-});
-app.use(limiter);
+app.use(limiter); // Moved after limiter definition
 
 // CSRF protection
 const csrfProtection = csrf({ cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } });
@@ -321,5 +320,5 @@ app.use((err, req, res, next) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000; // Match Render's logged port
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
