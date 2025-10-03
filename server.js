@@ -227,7 +227,11 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       inlineScripts: req.body.inlineScripts || [],
       cookieAccess: req.body.cookieAccess || false,
       thirdPartyRequests: req.body.thirdPartyRequests || [],
-      postMessageCalls: req.body.postMessageCalls || []
+      postMessageCalls: req.body.postMessageCalls || [],
+      touchSupport: req.body.touchSupport || 'Unknown',
+      batteryStatus: req.body.batteryStatus || 'Unknown',
+      currentUrl: req.body.currentUrl || 'Unknown',
+      scrollPosition: req.body.scrollPosition || 'Unknown'
     };
 
     const threats = detectSecurityThreats(req, visitorInfo);
@@ -265,11 +269,15 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Screen Size', value: visitorInfo.screenSize, inline: true },
       { name: 'Color Depth', value: visitorInfo.colorDepth, inline: true },
       { name: 'Timezone', value: visitorInfo.timezone, inline: true },
+      { name: 'Touch Support', value: visitorInfo.touchSupport, inline: true },
+      { name: 'Battery Status', value: visitorInfo.batteryStatus, inline: true },
+      { name: 'Current URL', value: visitorInfo.currentUrl, inline: true },
+      { name: 'Scroll Position', value: visitorInfo.scrollPosition, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 13); // Session ID to Proxy
-    const secondBatch = fields.slice(13);   // Hosting to Threats
+    const firstBatch = fields.slice(0, 15); // Session ID to Language
+    const secondBatch = fields.slice(15);   // Accept to Threats
 
     const payload1 = {
       embeds: [{
