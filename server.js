@@ -1,4 +1,4 @@
-// testing only :)
+
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -138,10 +138,11 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.cookies?.some(cookie => cookie.domain?.startsWith('.'))) {
+  // Check cookies as an object
+  if (req.cookies && Object.values(req.cookies).some(value => value.includes('.'))) {
     threats.push({
       type: 'Subdomain Cookie Scope Abuse',
-      details: 'Broad cookie domain detected'
+      details: 'Broad cookie value detected'
     });
   }
 
