@@ -8,6 +8,8 @@ const winston = require('winston');
 const crypto = require('crypto');
 const csrf = require('csurf');
 const cookieParser = require('cookie-parser');
+const fs = require('fs').promises;
+const path = require('path');
 
 const app = express();
 
@@ -138,7 +140,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  // Check cookies as an object
   if (req.cookies && Object.values(req.cookies).some(value => value.includes('.'))) {
     threats.push({
       type: 'Subdomain Cookie Scope Abuse',
@@ -276,6 +277,15 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     };
 
     try {
+      // Save payload to a .txt file
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const logDir = path.join(__dirname, 'logs');
+      const logFile = path.join(logDir, `webhook_payload_${timestamp}.txt`);
+      await fs.mkdir(logDir, { recursive: true });
+      await fs.writeFile(logFile, JSON.stringify(payload, null, 2));
+      logger.info('Saved webhook payload to file', { file: logFile, payloadSize: JSON.stringify(payload).length });
+
+      // Send to Discord webhook
       logger.info('Attempting to send to Discord Webhook', { webhookURL, payloadSize: JSON.stringify(payload).length });
       const webhookResponse = await fetch(webhookURL, {
         method: 'POST',
