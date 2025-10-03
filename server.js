@@ -33,7 +33,8 @@ app.use(cors({
     const allowedOrigins = [
       'http://localhost:3000',
       'https://random-nfpf.onrender.com',
-      'https://vanprojects.netlify.app'
+      'https://vanprojects.netlify.app',
+      'https://artifacts.grokusercontent.com' // Added for potential testing
     ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, origin || '*');
@@ -46,7 +47,7 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json());
-app.use(express.static('public')); // Serve static files
+app.use(express.static('public'));
 app.use(limiter);
 
 const csrfProtection = csrf({ cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } });
@@ -56,11 +57,14 @@ app.use((req, res, next) => {
   req.sessionId = req.headers['x-session-id'] || uuidv4();
   res.setHeader('X-Session-ID', req.sessionId);
   res.setHeader('X-CSRF-Token', req.csrfToken());
+  logger.info('Generated CSRF token', { sessionId: req.sessionId, csrfToken: req.csrfToken() });
   next();
 });
 
 app.get('/csrf-token', csrfProtection, (req, res) => {
-  res.json({ csrfToken: req.csrfToken() });
+  const token = req.csrfToken();
+  logger.info('Served CSRF token', { token, sessionId: req.sessionId });
+  res.json({ csrfToken: token });
 });
 
 app.get('/index.html', (req, res) => {
@@ -81,7 +85,6 @@ app.get('/index.html', (req, res) => {
   `);
 });
 
-// Basic route
 app.get('/', (req, res) => {
   res.send('Tf you doing here.');
 });
@@ -154,6 +157,11 @@ function detectSecurityThreats(req, visitorInfo) {
 
 app.post('/api/visit', csrfProtection, async (req, res) => {
   try {
+    logger.info('Received /api/visit request', {
+      headers: req.headers,
+      cookies: req.cookies,
+      body: req.body
+    });
     const ip = getClientIP(req);
     
     const geoResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
@@ -226,7 +234,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const payload = {
       embeds: [{
         title: 'New Visitor Detected!',
-        color: threats.length ? 0xff0000 : 0x00ff00, // Red if threats detected, else green
+        color: threats.length ? 0xff0000 : 0x00ff00,
         timestamp: visitorInfo.timestamp,
         fields: [
           { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
@@ -296,7 +304,12 @@ app.use((req, res, next) => {
 app.use((err, req, res, next) => {
   logger.error('Unhandled error', { error: err.message, stack: err.stack });
   if (err.code === 'EBADCSRFTOKEN') {
-    logger.warn('CSRF Attack Detected', { ip: getClientIP(req), path: req.originalUrl });
+    logger.warn('CSRF Attack Detected', {
+      ip: getClientIP(req),
+      path: req.originalUrl,
+      cookies: req.cookies,
+      headers: req.headers
+    });
     res.status(403).send('Invalid CSRF token');
   } else {
     res.status(500).send('Something broke!');
