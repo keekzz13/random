@@ -33,7 +33,11 @@ const limiter = rateLimit({
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    const allowedOrigins = ['http://localhost:3000', 'https://random-nfpf.onrender.com'];
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'https://random-nfpf.onrender.com',
+      'https://vanprojects.netlify.app' // Added trusted site
+    ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, origin || '*');
     } else {
@@ -46,7 +50,7 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.static('public')); // Serve static files
-app.use(limiter); // Moved after limiter definition
+app.use(limiter);
 
 // CSRF protection
 const csrfProtection = csrf({ cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } });
@@ -320,5 +324,5 @@ app.use((err, req, res, next) => {
   }
 });
 
-const PORT = process.env.PORT || 10000; // Match Render's logged port
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
