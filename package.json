@@ -1,5 +1,5 @@
 {
-  "name": "random-test",
+  "name": "visitor-tracker",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -14,5 +14,8 @@
     "winston": "^3.8.2",
     "csurf": "^1.11.0",
     "cookie-parser": "^1.4.6"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }
