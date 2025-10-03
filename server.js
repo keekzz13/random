@@ -9,7 +9,6 @@ const csrf = require('csurf');
 const cookieParser = require('cookie-parser');
 const app = express();
 
-// Initialize Winston logger
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -22,21 +21,19 @@ const logger = winston.createLogger({
   ]
 });
 
-// Rate limiting (defined before usage)
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000, // 15 min
   max: 100,
   standardHeaders: true,
   legacyHeaders: false
 });
 
-// Middleware
 app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
       'http://localhost:3000',
       'https://random-nfpf.onrender.com',
-      'https://vanprojects.netlify.app' // Added trusted site
+      'https://vanprojects.netlify.app'
     ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, origin || '*');
@@ -52,11 +49,9 @@ app.use(express.json());
 app.use(express.static('public')); // Serve static files
 app.use(limiter);
 
-// CSRF protection
 const csrfProtection = csrf({ cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } });
 app.use(csrfProtection);
 
-// Generate session ID
 app.use((req, res, next) => {
   req.sessionId = req.headers['x-session-id'] || uuidv4();
   res.setHeader('X-Session-ID', req.sessionId);
@@ -64,7 +59,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve index.html with CSRF token
+app.get('/csrf-token', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
+
 app.get('/index.html', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -88,13 +86,11 @@ app.get('/', (req, res) => {
   res.send('Tf you doing here.');
 });
 
-// Utility to get client IP
 function getClientIP(req) {
   const forwarded = req.headers['x-forwarded-for'];
   return forwarded ? forwarded.split(',')[0].trim() : req.socket.remoteAddress;
 }
 
-// Utility to generate device fingerprint
 function getDeviceFingerprint(req) {
   const components = [
     req.headers['user-agent'] || '',
@@ -108,11 +104,9 @@ function getDeviceFingerprint(req) {
   return crypto.createHash('md5').update(components.join('|')).digest('hex');
 }
 
-// Check for security threats
 function detectSecurityThreats(req, visitorInfo) {
   const threats = [];
 
-  // XSS: Check for suspicious inline scripts or cookie access
   if (req.body.inlineScripts?.length || req.body.cookieAccess) {
     threats.push({
       type: 'XSS',
@@ -120,7 +114,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  // Referrer Leakage: Check for sensitive tokens in referer
   if (req.headers['referer']?.includes('token=') || req.headers['referer']?.includes('auth=')) {
     threats.push({
       type: 'Referrer Leakage',
@@ -128,7 +121,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  // Cookie Syncing: Check for third-party domains
   if (req.body.thirdPartyRequests?.length) {
     threats.push({
       type: 'Cookie Syncing',
@@ -136,7 +128,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  // Subdomain Cookie Scope Abuse: Check cookie domain
   if (req.cookies?.some(cookie => cookie.domain?.startsWith('.'))) {
     threats.push({
       type: 'Subdomain Cookie Scope Abuse',
@@ -144,7 +135,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  // MITM: Flag non-secure connections
   if (!req.secure && process.env.NODE_ENV === 'production') {
     threats.push({
       type: 'MITM Risk',
@@ -152,7 +142,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  // PostMessage Misuse
   if (req.body.postMessageCalls?.length) {
     threats.push({
       type: 'PostMessage Misuse',
@@ -163,12 +152,10 @@ function detectSecurityThreats(req, visitorInfo) {
   return threats;
 }
 
-// Enhanced visitor info endpoint
 app.post('/api/visit', csrfProtection, async (req, res) => {
   try {
     const ip = getClientIP(req);
     
-    // Fetch geolocation data
     const geoResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
     const geoData = await geoResponse.json();
 
@@ -177,16 +164,13 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       return res.status(400).send('Invalid IP address');
     }
 
-    // Parse user agent
     const agent = useragent.parse(req.headers['user-agent']);
     const referer = req.headers['referer'] || 'Direct';
     const fingerprint = getDeviceFingerprint(req);
 
-    // Safely handle plugins and mime types
     const plugins = req.body.plugins ? Array.isArray(req.body.plugins) ? req.body.plugins : [] : [];
     const mimeTypes = req.body.mimeTypes ? Array.isArray(req.body.mimeTypes) ? req.body.mimeTypes : [] : [];
 
-    // Compile visitor info
     const visitorInfo = {
       sessionId: req.sessionId,
       ip: geoData.query,
@@ -231,16 +215,13 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       postMessageCalls: req.body.postMessageCalls || []
     };
 
-    // Detect security threats
     const threats = detectSecurityThreats(req, visitorInfo);
     if (threats.length) {
       logger.warn('Security Threats Detected', { threats, visitorInfo });
     }
 
-    // Log to Winston
     logger.info('Visitor Info', { ...visitorInfo, threats });
 
-    // Send to Discord webhook with embed
     const webhookURL = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
     const payload = {
       embeds: [{
@@ -302,7 +283,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
   }
 });
 
-// Request logging middleware
 app.use((req, res, next) => {
   logger.info('Incoming Request', {
     method: req.method,
@@ -313,7 +293,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   logger.error('Unhandled error', { error: err.message, stack: err.stack });
   if (err.code === 'EBADCSRFTOKEN') {
