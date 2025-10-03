@@ -25,7 +25,7 @@ const logger = winston.createLogger({
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    const allowedOrigins = ['http://localhost:3000', 'https://your-trusted-domain.com'];
+    const allowedOrigins = ['http://localhost:3000', 'https://vanprojects.netlify.app/'];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, origin || '*');
     } else {
@@ -37,6 +37,8 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json());
+app.use(express.static('public')); // Serve static files
+app.use(limiter);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -57,6 +59,25 @@ app.use((req, res, next) => {
   res.setHeader('X-Session-ID', req.sessionId);
   res.setHeader('X-CSRF-Token', req.csrfToken());
   next();
+});
+
+// Serve index.html with CSRF token
+app.get('/index.html', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="csrf-token" content="${req.csrfToken()}">
+      <title>Visitor Tracking</title>
+    </head>
+    <body>
+      <h1>Welcome</h1>
+      <script src="/client.js"></script>
+    </body>
+    </html>
+  `);
 });
 
 // Basic route
