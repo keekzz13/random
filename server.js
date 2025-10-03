@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -25,7 +24,7 @@ const logger = winston.createLogger({
 });
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
+  windowMs: 15 * 60 * 1000, 
   max: 100,
   standardHeaders: true,
   legacyHeaders: false
@@ -99,8 +98,58 @@ app.get('/', (req, res) => {
 });
 
 function getClientIP(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  return forwarded ? forwarded.split(',')[0].trim() : req.socket.remoteAddress;
+  const ipHeaders = [
+    'x-forwarded-for',
+    'cf-connecting-ip', 
+    'true-client-ip', 
+    'x-real-ip', 
+    'x-client-ip',
+    'forwarded'
+  ];
+
+  for (const header of ipHeaders) {
+    const value = req.headers[header];
+    if (value) {
+      if (header === 'forwarded') {
+        // Parse Forwarded header (e.g., "for=192.0.2.1")
+        const match = value.match(/for=([^;,\s]+)/i);
+        if (match && match[1]) {
+          const ip = match[1].replace(/[\[\]"]/g, '').trim(); // Remove IPv6 brackets or quotes
+          if (isValidIP(ip)) {
+            logger.info('IP retrieved from Forwarded header', { ip, header });
+            return ip;
+          }
+        }
+      } else {
+        // Split x-forwarded-for or similar headers and take the first IP
+        const ip = value.split(',')[0].trim();
+        if (isValidIP(ip)) {
+          logger.info('IP retrieved from header', { ip, header });
+          return ip;
+        }
+      }
+    }
+  }
+
+  const socketIP = req.socket.remoteAddress;
+  if (isValidIP(socketIP)) {
+    logger.info('IP retrieved from socket', { ip: socketIP });
+    return socketIP;
+  }
+
+  const fallbackIP = socketIP === '::1' ? '127.0.0.1' : socketIP;
+  logger.warn('No valid IP found, using fallback', { ip: fallbackIP });
+  return fallbackIP;
+}
+
+function isValidIP(ip) {
+  if (!ip) return false;
+
+  const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  if (ipv4Regex.test(ip)) return true;
+
+  const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)$/;
+  return ipv6Regex.test(ip);
 }
 
 function detectSecurityThreats(req, visitorInfo) {
@@ -348,9 +397,9 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 16); // Session ID to Device Type
-    const secondBatch = fields.slice(16, 32); // Referer to Part 3: Connection Type
-    const thirdBatch = fields.slice(32); // Part 3: Clipboard Access to Threats
+    const firstBatch = fields.slice(0, 16); 
+    const secondBatch = fields.slice(16, 32); 
+    const thirdBatch = fields.slice(32);
 
     const payload1 = {
       embeds: [{
@@ -418,10 +467,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
       logger.info('Successfully sent to Discord Webhook (Part 1)', { status: webhookResponse1.status, webhookURL });
 
-      // Delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Send second webhook
       logger.info('Attempting to send to Discord Webhook (Part 2)', { webhookURL, payloadSize: JSON.stringify(payload2).length });
       const webhookResponse2 = await fetch(webhookURL, {
         method: 'POST',
