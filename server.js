@@ -11,6 +11,7 @@ const fetch = require('node-fetch');
 
 const app = express();
 const port = process.env.PORT || 10000;
+const csrfTokens = new Map();
 
 const logger = winston.createLogger({
   level: 'info',
@@ -31,12 +32,16 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 app.use((req, res, next) => {
-  req.sessionId = req.headers['x-session-id'] || uuidv4();
-  res.setHeader('X-Session-ID', req.sessionId);
-  req.csrfToken = () => uuidv4();
-  const token = req.csrfToken();
-  res.setHeader('X-CSRF-Token', token);
-  logger.info('Generated CSRF token', { sessionId: req.sessionId, csrfToken: token });
+  const sessionId = req.headers['x-session-id'] || uuidv4();
+  req.sessionId = sessionId;
+  res.setHeader('X-Session-ID', sessionId);
+  if (!csrfTokens.has(sessionId)) {
+    const token = uuidv4();
+    csrfTokens.set(sessionId, token);
+    logger.info('Generated CSRF token', { sessionId, csrfToken: token });
+  }
+  req.csrfToken = csrfTokens.get(sessionId);
+  res.setHeader('X-CSRF-Token', req.csrfToken);
   next();
 });
 
@@ -53,15 +58,17 @@ function getClientIP(req) {
 }
 
 app.get('/csrf-token', (req, res) => {
-  const token = req.csrfToken();
+  const token = csrfTokens.get(req.sessionId) || uuidv4();
+  csrfTokens.set(req.sessionId, token);
   logger.info('Served CSRF token', { token, sessionId: req.sessionId });
   res.json({ csrfToken: token });
 });
 
 const csrfMiddleware = (req, res, next) => {
   const csrfToken = req.headers['x-csrf-token'];
-  if (!csrfToken || csrfToken !== req.csrfToken()) {
-    logger.warn('CSRF Attack Detected', { ip: getClientIP(req).primary });
+  const expectedToken = csrfTokens.get(req.sessionId);
+  if (!csrfToken || csrfToken !== expectedToken) {
+    logger.warn('CSRF Attack Detected', { ip: getClientIP(req).primary, receivedToken: csrfToken, expectedToken });
     return res.status(403).send('Invalid CSRF token');
   }
   next();
@@ -187,20 +194,21 @@ app.post('/api/visit', csrfMiddleware, async (req, res) => {
 
     for (let i = 0; i < webhookPayloads.length; i++) {
       const payload = webhookPayloads[i];
-      logger.info(`Attempting to send to Discord Webhook (Part ${i + 1})`, { payloadSize: JSON.stringify(payload).length });
+      logger.info(`Sending to Discord (Part ${i + 1})`, { payloadSize: JSON.stringify(payload).length });
       await fetch('https://discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       }).then(res => {
-        logger.info(`Successfully sent to Discord Webhook (Part ${i + 1})`, { status: res.status });
+        logger.info(`Sent to Discord (Part ${i + 1})`, { status: res.status });
       });
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
+    csrfTokens.delete(req.sessionId); // Clean up token after use
     res.json({ status: 'success' });
   } catch (error) {
-    logger.error('Error processing /api/visit', { error: error.message });
+    logger.error('Error in /api/visit', { error: error.message });
     res.status(500).send('Server error');
   }
 });
