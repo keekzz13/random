@@ -13,6 +13,6 @@
     "uuid": "^10.0.0",
     "winston": "^3.14.2",
     "cookie-parser": "^1.4.6",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^3.3.2"
   }
 }
