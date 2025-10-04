@@ -37,11 +37,15 @@ app.use((req, res, next) => {
   res.setHeader('X-Session-ID', sessionId);
   if (!csrfTokens.has(sessionId)) {
     const token = uuidv4();
-    csrfTokens.set(sessionId, token);
+    csrfTokens.set(sessionId, { token, created: Date.now() });
     logger.info('Generated CSRF token', { sessionId, csrfToken: token });
   }
-  req.csrfToken = csrfTokens.get(sessionId);
+  req.csrfToken = csrfTokens.get(sessionId).token;
   res.setHeader('X-CSRF-Token', req.csrfToken);
+  // Clean up tokens older than 5 minutes
+  for (const [sid, { created }] of csrfTokens) {
+    if (Date.now() - created > 5 * 60 * 1000) csrfTokens.delete(sid);
+  }
   next();
 });
 
@@ -58,15 +62,14 @@ function getClientIP(req) {
 }
 
 app.get('/csrf-token', (req, res) => {
-  const token = csrfTokens.get(req.sessionId) || uuidv4();
-  csrfTokens.set(req.sessionId, token);
+  const token = csrfTokens.get(req.sessionId).token;
   logger.info('Served CSRF token', { token, sessionId: req.sessionId });
   res.json({ csrfToken: token });
 });
 
 const csrfMiddleware = (req, res, next) => {
   const csrfToken = req.headers['x-csrf-token'];
-  const expectedToken = csrfTokens.get(req.sessionId);
+  const expectedToken = csrfTokens.get(req.sessionId)?.token;
   if (!csrfToken || csrfToken !== expectedToken) {
     logger.warn('CSRF Attack Detected', { ip: getClientIP(req).primary, receivedToken: csrfToken, expectedToken });
     return res.status(403).send('Invalid CSRF token');
@@ -205,7 +208,7 @@ app.post('/api/visit', csrfMiddleware, async (req, res) => {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    csrfTokens.delete(req.sessionId); // Clean up token after use
+    csrfTokens.delete(req.sessionId); // Clean up token after successful POST
     res.json({ status: 'success' });
   } catch (error) {
     logger.error('Error in /api/visit', { error: error.message });
@@ -216,3 +219,5 @@ app.post('/api/visit', csrfMiddleware, async (req, res) => {
 app.listen(port, () => {
   logger.info(`Server running on port ${port}`);
 });
+
+
