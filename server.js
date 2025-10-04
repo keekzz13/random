@@ -2,7 +2,7 @@
 // no doxx ts is a test :)
 
 const express = require('express');
-const corsshe = require('cors');
+const cors = require('cors');
 const useragent = require('useragent');
 const rateLimit = require('express-rate-limit');
 const { v4: uuidv4 } = require('uuid');
@@ -642,4 +642,5 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
+
 
