@@ -30,18 +30,21 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 app.use((req, res, next) => {
-  const sessionId = req.headers['x-session-id'] || uuidv4();
+  let sessionId = req.headers['x-session-id'];
+  if (!sessionId) {
+    sessionId = uuidv4();
+    logger.info('Generated new session ID', { sessionId });
+  }
   req.sessionId = sessionId;
   res.setHeader('X-Session-ID', sessionId);
-  if (req.path === '/csrf-token' && !csrfTokens.has(sessionId)) {
+  if (!csrfTokens.has(sessionId)) {
     const token = uuidv4();
     csrfTokens.set(sessionId, { token, created: Date.now() });
     logger.info('Generated CSRF token', { sessionId, csrfToken: token });
   }
-  req.csrfToken = csrfTokens.get(sessionId)?.token || null;
-  if (req.csrfToken) {
-    res.setHeader('X-CSRF-Token', req.csrfToken);
-  }
+  req.csrfToken = csrfTokens.get(sessionId).token;
+  res.setHeader('X-CSRF-Token', req.csrfToken);
+  // Clean up tokens older than 5 minutes
   for (const [sid, { created }] of csrfTokens) {
     if (Date.now() - created > 5 * 60 * 1000) csrfTokens.delete(sid);
   }
@@ -63,6 +66,7 @@ function getClientIP(req) {
 app.get('/csrf-token', (req, res) => {
   const token = csrfTokens.get(req.sessionId)?.token;
   if (!token) {
+    logger.error('No CSRF token for session', { sessionId: req.sessionId });
     return res.status(500).send('No CSRF token available');
   }
   logger.info('Served CSRF token', { token, sessionId: req.sessionId });
@@ -78,7 +82,8 @@ const csrfMiddleware = (req, res, next) => {
       receivedToken: csrfToken || 'None', 
       expectedToken: expectedToken || 'None',
       sessionId: req.sessionId,
-      path: req.path
+      path: req.path,
+      headers: req.headers
     });
     return res.status(403).send('Invalid CSRF token');
   }
@@ -216,10 +221,10 @@ app.post('/api/visit', csrfMiddleware, async (req, res) => {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    csrfTokens.delete(req.sessionId); 
+    csrfTokens.delete(req.sessionId); // Clean up token after successful POST
     res.json({ status: 'success' });
   } catch (error) {
-    logger.error('Error in /api/visit', { error: error.message });
+    logger.error('Error in /api/visit', { error: error.message, sessionId: req.sessionId });
     res.status(500).send('Server error');
   }
 });
