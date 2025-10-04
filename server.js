@@ -1,5 +1,3 @@
-// don't take it srsly guys
-// no doxx ts is a test :)
 const express = require('express');
 const cors = require('cors');
 const useragent = require('useragent');
@@ -35,14 +33,15 @@ app.use((req, res, next) => {
   const sessionId = req.headers['x-session-id'] || uuidv4();
   req.sessionId = sessionId;
   res.setHeader('X-Session-ID', sessionId);
-  if (!csrfTokens.has(sessionId)) {
+  if (req.path === '/csrf-token' && !csrfTokens.has(sessionId)) {
     const token = uuidv4();
     csrfTokens.set(sessionId, { token, created: Date.now() });
     logger.info('Generated CSRF token', { sessionId, csrfToken: token });
   }
-  req.csrfToken = csrfTokens.get(sessionId).token;
-  res.setHeader('X-CSRF-Token', req.csrfToken);
-  // Clean up tokens older than 5 minutes
+  req.csrfToken = csrfTokens.get(sessionId)?.token || null;
+  if (req.csrfToken) {
+    res.setHeader('X-CSRF-Token', req.csrfToken);
+  }
   for (const [sid, { created }] of csrfTokens) {
     if (Date.now() - created > 5 * 60 * 1000) csrfTokens.delete(sid);
   }
@@ -62,7 +61,10 @@ function getClientIP(req) {
 }
 
 app.get('/csrf-token', (req, res) => {
-  const token = csrfTokens.get(req.sessionId).token;
+  const token = csrfTokens.get(req.sessionId)?.token;
+  if (!token) {
+    return res.status(500).send('No CSRF token available');
+  }
   logger.info('Served CSRF token', { token, sessionId: req.sessionId });
   res.json({ csrfToken: token });
 });
@@ -71,7 +73,13 @@ const csrfMiddleware = (req, res, next) => {
   const csrfToken = req.headers['x-csrf-token'];
   const expectedToken = csrfTokens.get(req.sessionId)?.token;
   if (!csrfToken || csrfToken !== expectedToken) {
-    logger.warn('CSRF Attack Detected', { ip: getClientIP(req).primary, receivedToken: csrfToken, expectedToken });
+    logger.warn('CSRF Attack Detected', { 
+      ip: getClientIP(req).primary, 
+      receivedToken: csrfToken || 'None', 
+      expectedToken: expectedToken || 'None',
+      sessionId: req.sessionId,
+      path: req.path
+    });
     return res.status(403).send('Invalid CSRF token');
   }
   next();
@@ -208,7 +216,7 @@ app.post('/api/visit', csrfMiddleware, async (req, res) => {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    csrfTokens.delete(req.sessionId); // Clean up token after successful POST
+    csrfTokens.delete(req.sessionId); 
     res.json({ status: 'success' });
   } catch (error) {
     logger.error('Error in /api/visit', { error: error.message });
@@ -219,5 +227,3 @@ app.post('/api/visit', csrfMiddleware, async (req, res) => {
 app.listen(port, () => {
   logger.info(`Server running on port ${port}`);
 });
-
-
