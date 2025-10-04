@@ -5,15 +5,14 @@
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
+    "dependencies": {
     "express": "^4.21.1",
     "cors": "^2.8.5",
     "useragent": "^2.3.0",
     "express-rate-limit": "^7.4.0",
     "uuid": "^10.0.0",
-    "winston": "^3.15.0",
-    "csurf": "^1.11.0",
-    "cookie-parser": "^1.4.7"
+    "winston": "^3.14.2",
+    "cookie-parser": "^1.4.6"
   },
   "engines": {
     "node": "22.x"
