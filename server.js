@@ -390,7 +390,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     logger.info('Visitor Info', { ...visitorInfo, threats });
 
-    const webhookURL = 'https://discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
+    const webhookURL = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
 
     const fields = [
       { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
@@ -638,3 +638,4 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
+
