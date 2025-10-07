@@ -149,6 +149,38 @@ function isValidIP(ip) {
   return ipv6Regex.test(ip);
 }
 
+function processReferrer(req) {
+  const clientReferrer = req.body.part1?.referrer || 'Direct';
+  const serverReferrer = req.headers['referer'] || 'Direct';
+  const platforms = [
+    { domain: 'facebook.com', name: 'Facebook' },
+    { domain: 'discord.com', name: 'Discord' },
+    { domain: 'youtube.com', name: 'YouTube' },
+    { domain: 't.co', name: 'Twitter' },
+    { domain: 'reddit.com', name: 'Reddit' },
+    { domain: 'tiktok.com', name: 'TikTok' },
+    { domain: 'instagram.com', name: 'Instagram' }
+  ];
+  if (clientReferrer !== 'Direct' && clientReferrer !== 'Unknown (Invalid Referrer)') {
+    return clientReferrer;
+  }
+  if (serverReferrer !== 'Direct') {
+    try {
+      const url = new URL(serverReferrer);
+      const hostname = url.hostname.toLowerCase();
+      for (const platform of platforms) {
+        if (hostname.includes(platform.domain)) {
+          return platform.name;
+        }
+      }
+      return serverReferrer;
+    } catch (e) {
+      return 'Unknown (Invalid Server Referrer)';
+    }
+  }
+  return 'Direct';
+}
+
 function detectSecurityThreats(req, visitorInfo) {
   const threats = [];
 
@@ -159,10 +191,24 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
-  if (req.headers['referer']?.includes('token=') || req.headers['referer']?.includes('auth=')) {
+  if ((req.headers['referer'] || req.body.part1?.referrer)?.includes('token=') || (req.headers['referer'] || req.body.part1?.referrer)?.includes('auth=')) {
     threats.push({
       type: 'Referrer Leakage',
-      details: `Sensitive data in referer: ${req.headers['referer']}`
+      details: `Sensitive data in referrer: ${req.headers['referer'] || req.body.part1?.referrer}`
+    });
+  }
+
+  if (!req.body.part1?.referrer && !req.headers['referer']) {
+    threats.push({
+      type: 'Missing Referrer',
+      details: 'No referrer provided by client or server'
+    });
+  }
+
+  if ((req.body.part1?.referrer === 'Unknown (Invalid Referrer)' || req.headers['referer'] === 'Unknown (Invalid Server Referrer)') && req.body.part1?.referrer !== 'Direct') {
+    threats.push({
+      type: 'Invalid Referrer',
+      details: 'Malformed or unparsable referrer detected'
     });
   }
 
@@ -264,10 +310,15 @@ function detectSecurityThreats(req, visitorInfo) {
     });
   }
 
+  if (req.body.part1?.location !== 'Unknown' && req.body.part1?.location.latitude === 0 && req.body.part1?.location.longitude === 0) {
+    threats.push({
+      type: 'Suspicious Location',
+      details: 'Device location coordinates (0, 0) detected'
+    });
+  }
+
   return threats;
 }
-
-// ... (previous server.js code up to /api/visit endpoint)
 
 app.post('/api/visit', csrfProtection, async (req, res) => {
   try {
@@ -288,7 +339,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     }
 
     const agent = useragent.parse(req.headers['user-agent']);
-    const referer = req.headers['referer'] || 'Direct';
+    const referer = processReferrer(req);
 
     const plugins = req.body.part3?.plugins ? Array.isArray(req.body.part3.plugins) ? req.body.part3.plugins : [] : [];
     const mimeTypes = req.body.part3?.mimeTypes ? Array.isArray(req.body.part3.mimeTypes) ? req.body.part3.mimeTypes : [] : [];
@@ -314,7 +365,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       browser: agent.toAgent(),
       os: agent.os.toString(),
       deviceType: agent.device.toString(),
-      referer: req.body.part1?.referer || 'Direct',
+      referer: referer,
       acceptLanguage: req.headers['accept-language'] || 'Unknown',
       accept: req.headers['accept'] || 'Unknown',
       connection: req.headers['connection'] || 'Unknown',
@@ -621,4 +672,3 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
-
